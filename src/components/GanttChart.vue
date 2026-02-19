@@ -453,7 +453,7 @@ interface Props {
   onTodayLocate?: () => void
   onExportCsv?: () => boolean | void
   onExportPdf?: () => void
-  onLanguageChange?: (lang: 'zh-CN' | 'en-US') => void
+  onLanguageChange?: (lang: 'zh-CN' | 'en-US' | 'de-DE') => void
   onThemeChange?: (isDark: boolean) => void
   onFullscreenChange?: (isFullscreen: boolean) => void
   onExpandAll?: () => void
@@ -471,6 +471,7 @@ interface Props {
   localeMessages?: Partial<{
     'zh-CN'?: Partial<import('../composables/useI18n').Messages['zh-CN']>
     'en-US'?: Partial<import('../composables/useI18n').Messages['en-US']>
+    'de-DE'?: Partial<import('../composables/useI18n').Messages['de-DE']>
   }>
   // 工作时间配置
   workingHours?: {
@@ -540,7 +541,7 @@ interface Props {
   // 展开/收起所有任务（响应式）
   expandAll?: boolean
   // 语言设置（响应式）
-  locale?: 'zh-CN' | 'en-US'
+  locale?: 'zh-CN' | 'en-US' | 'de-DE'
   // 时间刻度（响应式）
   timeScale?: TimelineScale
   // 主题模式（响应式）
@@ -2687,7 +2688,7 @@ const currentLocale = (): string => {
  * 设置语言
  * @param locale 语言代码
  */
-const setLocale = (locale: 'zh-CN' | 'en-US') => {
+const setLocale = (locale: 'zh-CN' | 'en-US' | 'de-DE') => {
   const { setLocale: setI18nLocale } = useI18n()
   setI18nLocale(locale)
 }

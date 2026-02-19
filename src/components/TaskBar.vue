@@ -255,6 +255,16 @@ const barConfig = computed(() => ({
   ...props.taskBarConfig,
 }))
 
+const canMoveParentTask = computed(
+  () => props.isParent === true && barConfig.value.allowParentTaskMove === true,
+)
+const canResizeParentTask = computed(
+  () => props.isParent === true && barConfig.value.allowParentTaskResize === true,
+)
+const isParentTaskbarStyle = computed(
+  () => props.isParent === true && barConfig.value.parentTaskStyle === 'taskbar',
+)
+
 // 日期工具函数 - 处理时区安全的日期创建和操作
 const createLocalDate = (dateString: string | Date | undefined | null): Date | null => {
   if (!dateString) return null
@@ -1117,8 +1127,17 @@ const handleMouseDown = (e: MouseEvent, type: 'drag' | 'resize-left' | 'resize-r
     return
   }
 
-  // 如果已完成或是父级任务或年度视图，禁用所有交互
-  if (isCompleted.value || props.isParent || isInteractionDisabled.value) {
+  // 父任务交互由配置控制
+  if (props.isParent) {
+    const parentDragDisabled = type === 'drag' && !canMoveParentTask.value
+    const parentResizeDisabled = type !== 'drag' && !canResizeParentTask.value
+    if (parentDragDisabled || parentResizeDisabled) {
+      return
+    }
+  }
+
+  // 如果已完成或年度视图，禁用所有交互
+  if (isCompleted.value || isInteractionDisabled.value) {
     return
   }
 
@@ -3369,7 +3388,11 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
         borderTopColor: currentResourceColor,
       } : {}),
       color: taskStatus.color,
-      cursor: isCompleted || isParent ? 'default' : 'move',
+      cursor: isCompleted
+        ? 'default'
+        : (isParent
+            ? (canMoveParentTask ? 'move' : 'default')
+            : 'move'),
       '--row-height': `${rowHeight}px` /* 传递行高给CSS变量 */,
       '--handle-width': `${actualHandleWidth}px` /* 传递手柄宽度给CSS变量 */,
       '--parent-color': taskStatus.color, /* 传递父级TaskBar颜色给伪元素箭头使用 */
@@ -3388,6 +3411,7 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
       'week-view': isWeekView,
       'short-task-bar': isShortTaskBar,
       'overflow-effect': needsOverflowEffect,
+      'parent-taskbar-style': isParentTaskbarStyle,
       highlighted: isHighlighted,
       'primary-highlight': isPrimaryHighlight,
       dimmed: isDimmed,
@@ -3403,7 +3427,17 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
     @mouseleave="handleTaskBarMouseLeave"
   >
     <!-- 父级任务的标题（直接在内部居中显示） -->
-    <div v-if="isParent" class="parent-label-inner">
+    <div
+      v-if="isParent"
+      class="parent-label-inner"
+      :style="{ cursor: canMoveParentTask ? 'move' : 'default' }"
+      @mousedown="
+        e => {
+          if (!canMoveParentTask) return
+          handleMouseDown(e, 'drag')
+        }
+      "
+    >
       <slot v-if="hasContentSlot" name="custom-task-content" v-bind="slotPayload" />
       <template v-else> {{ task.name }} ({{ task.progress || 0 }}%) </template>
     </div>
@@ -3442,7 +3476,7 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
     <div
       v-if="
         !isCompleted &&
-        !isParent &&
+        (!isParent || canResizeParentTask) &&
         !isInteractionDisabled &&
         props.allowDragAndResize !== false &&
         !isHighlighted &&
@@ -3541,7 +3575,7 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
     <div
       v-if="
         !isCompleted &&
-        !isParent &&
+        (!isParent || canResizeParentTask) &&
         !isInteractionDisabled &&
         props.allowDragAndResize !== false &&
         !isHighlighted &&
@@ -4036,11 +4070,19 @@ class="hover-tooltip-arrow" :style="{
   /* background通过内联样式设置，使用taskStatus.bgColor，支持自定义barColor */
   top: 50% !important; /* 上下居中 */
   transform: translateY(-50%); /* 上下居中 */
-  cursor: pointer !important; /* 允许双击编辑 */
+  cursor: default !important;
   overflow: visible; /* 确保标题和箭头可见 */
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.task-bar.parent-task.parent-taskbar-style {
+  border-radius: 6px !important;
+  border: 1px solid var(--task-bar-border-color, rgba(64, 158, 255, 0.8));
+  height: calc(var(--row-height, 51px) - 10px) !important;
+  top: auto !important;
+  transform: none !important;
 }
 
 /* 高亮的父任务覆盖默认样式 */
@@ -4058,6 +4100,14 @@ class="hover-tooltip-arrow" :style="{
     0 8px 20px rgba(0, 0, 0, 0.35) !important;
   filter: brightness(1.25) drop-shadow(0 0 12px rgba(64, 158, 255, 0.6)) !important;
   transform: translateY(-50%) scale(1.08) !important;
+}
+
+.task-bar.parent-task.parent-taskbar-style.highlighted {
+  transform: scale(1.05) !important;
+}
+
+.task-bar.parent-task.parent-taskbar-style.primary-highlight {
+  transform: scale(1.08) !important;
 }
 
 /* 左侧向下箭头 */
@@ -4086,6 +4136,11 @@ class="hover-tooltip-arrow" :style="{
   z-index: 15;
 }
 
+.task-bar.parent-task.parent-taskbar-style::before,
+.task-bar.parent-task.parent-taskbar-style::after {
+  content: none !important;
+}
+
 /* 父级任务的标题（内部居中显示） */
 .task-bar.parent-task .parent-label-inner {
   color: white;
@@ -4097,6 +4152,11 @@ class="hover-tooltip-arrow" :style="{
   align-items: center;
   justify-content: center;
   height: 100%;
+}
+
+.task-bar.parent-task.parent-taskbar-style .parent-label-inner {
+  width: 100%;
+  padding: 0 10px;
 }
 
 .progress-bar {

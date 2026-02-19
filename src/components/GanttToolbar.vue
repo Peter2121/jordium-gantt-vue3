@@ -6,7 +6,7 @@ import { TimelineScale } from '../models/types/TimelineScale'
 import '../styles/app.css'
 
 // 语言定义 - 使用多语言系统的类型
-type Language = 'zh' | 'en'
+type Language = 'zh' | 'en' | 'de'
 
 const props = withDefaults(defineProps<Props>(), {
   config: () => ({}),
@@ -36,7 +36,7 @@ const emit = defineEmits<{
   'today-locate': []
   'export-csv': []
   'export-pdf': []
-  'language-change': [lang: 'zh-CN' | 'en-US']
+  'language-change': [lang: 'zh-CN' | 'en-US' | 'de-DE']
   'theme-change': [isDark: boolean]
   'fullscreen-change': [isFullscreen: boolean]
   'time-scale-change': [scale: TimelineScale]
@@ -50,9 +50,10 @@ const THEME_STORAGE_KEY = 'gantt-theme'
 const LANGUAGE_STORAGE_KEY = 'gantt-locale'
 
 // 保留原始类型以兼容外部API
-const localeMap: Record<Language, 'zh-CN' | 'en-US'> = {
+const localeMap: Record<Language, 'zh-CN' | 'en-US' | 'de-DE'> = {
   zh: 'zh-CN',
   en: 'en-US',
+  de: 'de-DE',
 }
 
 interface Props {
@@ -68,7 +69,7 @@ interface Props {
   onTodayLocate?: () => void
   onExportCsv?: () => void
   onExportPdf?: () => void
-  onLanguageChange?: (lang: 'zh-CN' | 'en-US') => void
+  onLanguageChange?: (lang: 'zh-CN' | 'en-US' | 'de-DE') => void
   onThemeChange?: (isDark: boolean) => void
   onFullscreenChange?: (isFullscreen: boolean) => void
   onTimeScaleChange?: (scale: TimelineScale) => void
@@ -475,7 +476,13 @@ const handleClickOutside = (event: MouseEvent) => {
 onMounted(() => {
   // 初始化语言状态，从多语言系统获取当前语言
   const currentLocale = locale.value
-  currentLanguage.value = currentLocale === 'zh-CN' ? 'zh' : 'en'
+  if (currentLocale === 'zh-CN') {
+    currentLanguage.value = 'zh'
+  } else if (currentLocale === 'de-DE') {
+    currentLanguage.value = 'de'
+  } else {
+    currentLanguage.value = 'en'
+  }
 
   // 不再直接设置document.documentElement，由GanttChart统一管理
 
@@ -551,7 +558,7 @@ onUnmounted(() => {
       </div>
 
       <!-- v1.9.0 视图模式切换按钮组 - 使用 Segmented Control 样式 -->
-      <div class="gantt-view-mode-control">
+      <div v-if="config.showViewModeSwitch !== false" class="gantt-view-mode-control">
         <div class="view-mode-track">
           <div
             class="view-mode-thumb"
@@ -745,13 +752,15 @@ onUnmounted(() => {
         <!-- 下拉菜单 -->
         <div v-if="showLanguageDropdown" class="language-menu">
           <div
-            v-for="lang in ['zh', 'en']"
+            v-for="lang in ['zh', 'en', 'de']"
             :key="lang"
             class="language-option"
             :class="{ active: currentLanguage === lang }"
             @click="selectLanguage(lang as Language)"
           >
-            <span class="option-text">{{ lang === 'zh' ? '中文' : 'English' }}</span>
+            <span class="option-text">
+              {{ lang === 'zh' ? '中文' : (lang === 'de' ? 'Deutsch' : 'English') }}
+            </span>
             <svg
               v-if="currentLanguage === lang"
               class="check-icon"

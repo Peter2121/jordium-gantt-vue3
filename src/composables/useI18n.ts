@@ -1,10 +1,10 @@
 import { ref, computed } from 'vue'
 
 // 支持的语言类型
-export type Locale = 'zh-CN' | 'en-US'
+export type Locale = 'zh-CN' | 'en-US' | 'de-DE'
 
 // 多语言配置
-const messages = {
+const messages: Record<Locale, any> = {
   'zh-CN': {
     dateNotSet: '未设置',
     // TaskList Header
@@ -611,6 +611,63 @@ const messages = {
       conflictSuffix: '',
     },
   },
+  'de-DE': {},
+}
+
+messages['de-DE'] = {
+  ...messages['en-US'],
+  yearMonthFormat: (year: number, month: number) =>
+    new Intl.DateTimeFormat('de-DE', {
+      month: 'long',
+      year: 'numeric',
+    }).format(new Date(year, month - 1, 1)),
+  language: 'Deutsch',
+  taskName: 'Aufgabenname',
+  resourceName: 'Ressourcenname',
+  startDate: 'Startdatum',
+  endDate: 'Enddatum',
+  milestone: 'Meilenstein',
+  today: 'Heute',
+  addTask: 'Bedarf/Aufgabe hinzufügen',
+  addMilestone: 'Meilenstein hinzufügen',
+  todayLocate: 'Heute',
+  todayLocateTooltip: 'Zu heute springen',
+  exportCsv: 'CSV exportieren',
+  exportPdf: 'PDF exportieren',
+  expandAll: 'Alle aufklappen',
+  collapseAll: 'Alle zuklappen',
+  taskView: 'Task View',
+  timeScaleHour: 'Stunde',
+  timeScaleDay: 'Tag',
+  timeScaleWeek: 'Woche',
+  timeScaleMonth: 'Monat',
+  timeScaleQuarter: 'Quartal',
+  timeScaleYear: 'Jahr',
+  monthNames: [
+    'Jan',
+    'Feb',
+    'Mär',
+    'Apr',
+    'Mai',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Okt',
+    'Nov',
+    'Dez',
+  ],
+  weekDays: ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'],
+  resourceView: {
+    ...messages['en-US'].resourceView,
+    desc: 'Ressourcenansicht',
+    capacity: 'Auslastung',
+    overloaded: 'Überlastet',
+    duration: 'Zeitraum',
+    overloadWarning: 'Überlastungswarnung',
+    conflictDuration: 'Konfliktzeitraum',
+    conflictWith: 'Konflikt mit',
+  },
 }
 
 // 允许外部合并自定义多语言
@@ -640,7 +697,7 @@ const LOCALE_STORAGE_KEY = 'gantt-locale'
 const getInitialLocale = (): Locale => {
   if (typeof window !== 'undefined') {
     const stored = localStorage.getItem(LOCALE_STORAGE_KEY)
-    if (stored && (stored === 'zh-CN' || stored === 'en-US')) {
+    if (stored && (stored === 'zh-CN' || stored === 'en-US' || stored === 'de-DE')) {
       return stored as Locale
     }
   }
