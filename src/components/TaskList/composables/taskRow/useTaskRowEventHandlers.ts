@@ -103,7 +103,7 @@ export function useTaskRowEventHandlers(
     if (!enableDrag.value || !taskRowRef.value || !dragOver) return
 
     const { taskId, event: mouseEvent } = event.detail
-    if (taskId === task.value.id) {
+    if (String(taskId) === String(task.value.id)) {
       dragOver(task.value, taskRowRef.value, mouseEvent)
     }
   }

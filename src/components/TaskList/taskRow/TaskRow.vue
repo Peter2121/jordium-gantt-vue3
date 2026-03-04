@@ -260,7 +260,7 @@ const slotPayload = computed(() => ({
   progressClass: progressClass.value,
 }))
 
-// 计算左侧边框颜色 - 支持barColor/color自定义
+// Sidebar left indicator color: prefer task.color; if absent, show no indicator.
 const leftBorderColor = computed(() => {
   // 资源视图：优先使用resource.color
   if (isResourceRow.value) {
@@ -269,11 +269,15 @@ const leftBorderColor = computed(() => {
       return resource.color
     }
   }
-  // 任务视图：使用barColor
+  // 任务视图：优先使用元素color字段
+  if ((props.task as any).color) {
+    return (props.task as any).color
+  }
+  // 兼容旧数据：回退到barColor
   if (props.task.barColor) {
     return props.task.barColor
   }
-  // 否则返回null，使用CSS默认样式
+  // 未设置颜色时不显示左侧色条
   return null
 })
 
@@ -286,7 +290,9 @@ const customBorderStyle = computed((): StyleValue => {
       borderLeftStyle: 'solid' as const,
     }
   }
-  return {}
+  return {
+    borderLeft: 'none !important' as any,
+  }
 })
 
 // 处理assignee列的显示数据

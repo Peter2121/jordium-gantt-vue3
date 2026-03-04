@@ -132,9 +132,10 @@ export function useTaskRowDrag(options: UseDragOptions) {
     event.preventDefault()
     event.stopPropagation()
 
-    // 确定放置位置：根据是否有子任务
-    const hasChildren = task.children && task.children.length > 0
-    const position: 'after' | 'child' = hasChildren ? 'child' : 'after'
+    // 确定放置位置：文件夹目标（story/isFolder/已有children）使用 child，高亮可“放入”
+    const hasChildren = !!(task.children && task.children.length > 0)
+    const isFolderTarget = task.type === 'story' || (task as any).isFolder === true || hasChildren
+    const position: 'after' | 'child' = isFolderTarget ? 'child' : 'after'
 
     dragState.value.dropTargetTask = task
     dragState.value.dropPosition = position
@@ -255,7 +256,7 @@ export function useTaskRowDrag(options: UseDragOptions) {
         // 查找最近的task-row元素
         const taskRow = elementUnderMouse.closest('.task-row') as HTMLElement
         if (taskRow && taskRow.dataset.taskId) {
-          const taskId = Number(taskRow.dataset.taskId)
+          const taskId = taskRow.dataset.taskId
 
           // 触发全局事件，让TaskRow组件处理
           window.dispatchEvent(

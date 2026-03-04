@@ -56,6 +56,12 @@ interface Props {
   autoCenterToday?: boolean
   // 是否固定时间范围（由外部控制startDate/endDate，内部不再自动改写）
   fixedRange?: boolean
+  // 是否启用在时间轴空白区域拖拽创建任务
+  enableCreateByDrag?: boolean
+  // 是否要求按住 Shift 才能拖拽创建
+  createByDragRequireShift?: boolean
+  // 拖拽创建的最小像素宽度，小于此值不触发创建
+  createByDragMinWidthPx?: number
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -82,6 +88,9 @@ const props = withDefaults(defineProps<Props>(), {
   ongoingTaskBackgroundColor: undefined,
   autoCenterToday: true,
   fixedRange: false,
+  enableCreateByDrag: false,
+  createByDragRequireShift: false,
+  createByDragMinWidthPx: 6,
 })
 
 // 定义emits
@@ -99,6 +108,14 @@ const emit = defineEmits<{
   delete: [task: Task, deleteChildren?: boolean]
   'link-deleted': [{ sourceTaskId: number; targetTaskId: number; updatedTask: Task }] // 链接已删除
   'resource-drag-end': [{ task: Task; sourceResourceIndex: number; targetResourceIndex: number; targetResource: Resource; newStartDate?: string; newEndDate?: string }] // v1.9.0 资源视图垂直拖拽结束
+  'timeline-drag-create-end': [{
+    task: Task
+    startDate: string
+    endDate: string
+    startMs: number
+    endMs: number
+    scale: TimelineScale
+  }]
 }>()
 
 // 多语言
@@ -3852,6 +3869,23 @@ const timelineContainer = ref<HTMLElement | null>(null)
 const timelineBodyElement = ref<HTMLElement | null>(null) // 缓存timeline-body元素引用
 let scrollRafId: number | null = null // 时间轴拖拽滚动的 RAF ID
 
+// 拖拽创建相关状态（仅任务视图）
+const isCreateDragging = ref(false)
+const createDragRowIndex = ref(-1)
+const createDragRowTop = ref(0)
+const createDragStartX = ref(0)
+const createDragCurrentX = ref(0)
+const createDragOverlayStyle = computed(() => {
+  const left = Math.min(createDragStartX.value, createDragCurrentX.value)
+  const width = Math.max(2, Math.abs(createDragCurrentX.value - createDragStartX.value))
+  return {
+    left: `${left}px`,
+    width: `${width}px`,
+    top: `${createDragRowTop.value + 2}px`,
+    height: `${Math.max(22, ROW_HEIGHT - 4)}px`,
+  }
+})
+
 // 边界滚动相关状态
 const isAutoScrolling = ref(false)
 let autoScrollTimer: number | null = null
@@ -3980,6 +4014,81 @@ const handleResourceTaskBarDrop = (event: Event) => {
   }
 }
 
+const formatCreateDateForScale = (value: Date): string => {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  const hour = String(value.getHours()).padStart(2, '0')
+  const minute = String(value.getMinutes()).padStart(2, '0')
+
+  if (currentTimeScale.value === TimelineScale.HOUR) {
+    return `${year}-${month}-${day} ${hour}:${minute}`
+  }
+  return `${year}-${month}-${day}`
+}
+
+const startCreateDrag = (event: MouseEvent): boolean => {
+  if (!props.enableCreateByDrag || viewMode.value !== 'task') return false
+  if (props.createByDragRequireShift && !event.shiftKey) return false
+  if (!timelineContainer.value || !timelineBodyElement.value) return false
+
+  const bodyRect = timelineBodyElement.value.getBoundingClientRect()
+  const relativeY = event.clientY - bodyRect.top + timelineBodyElement.value.scrollTop
+  const rowIndex = Math.floor(relativeY / ROW_HEIGHT)
+  if (rowIndex < 0 || rowIndex >= tasks.value.length) return false
+
+  const targetTask = tasks.value[rowIndex]
+  if (!targetTask) return false
+
+  const containerRect = timelineContainer.value.getBoundingClientRect()
+  const x = event.clientX - containerRect.left + timelineContainer.value.scrollLeft
+
+  isCreateDragging.value = true
+  createDragRowIndex.value = rowIndex
+  createDragRowTop.value = rowIndex * ROW_HEIGHT
+  createDragStartX.value = x
+  createDragCurrentX.value = x
+
+  event.preventDefault()
+  document.addEventListener('mousemove', handleMouseMove)
+  document.addEventListener('mouseup', handleMouseUp)
+  return true
+}
+
+const finishCreateDrag = () => {
+  if (!isCreateDragging.value) return
+
+  const rowIndex = createDragRowIndex.value
+  const targetTask = rowIndex >= 0 && rowIndex < tasks.value.length ? tasks.value[rowIndex] : null
+  const minX = Math.min(createDragStartX.value, createDragCurrentX.value)
+  const maxX = Math.max(createDragStartX.value, createDragCurrentX.value)
+  const width = Math.abs(createDragCurrentX.value - createDragStartX.value)
+
+  if (targetTask && width >= props.createByDragMinWidthPx) {
+    const startDateObj = getDateByScrollPosition(minX)
+    const endDateObj = getDateByScrollPosition(maxX)
+    const startMs = startDateObj.getTime()
+    const endMs = endDateObj.getTime()
+
+    if (!Number.isNaN(startMs) && !Number.isNaN(endMs)) {
+      emit('timeline-drag-create-end', {
+        task: targetTask,
+        startDate: formatCreateDateForScale(startDateObj),
+        endDate: formatCreateDateForScale(endDateObj),
+        startMs: Math.min(startMs, endMs),
+        endMs: Math.max(startMs, endMs),
+        scale: currentTimeScale.value,
+      })
+    }
+  }
+
+  isCreateDragging.value = false
+  createDragRowIndex.value = -1
+  createDragRowTop.value = 0
+  createDragStartX.value = 0
+  createDragCurrentX.value = 0
+}
+
 // 鼠标按下开始拖拽（在时间轴表头和body区域）
 const handleMouseDown = (event: MouseEvent) => {
   const target = event.target as HTMLElement
@@ -4034,6 +4143,9 @@ const handleMouseDown = (event: MouseEvent) => {
       if (isInteractiveElement) {
         return
       }
+      if (startCreateDrag(event)) {
+        return
+      }
     }
   }
 
@@ -4064,6 +4176,13 @@ const handleMouseDown = (event: MouseEvent) => {
 
 // 鼠标移动时拖拽滑动（支持水平和垂直方向）
 const handleMouseMove = (event: MouseEvent) => {
+  if (isCreateDragging.value && timelineContainer.value) {
+    event.preventDefault()
+    const containerRect = timelineContainer.value.getBoundingClientRect()
+    createDragCurrentX.value = event.clientX - containerRect.left + timelineContainer.value.scrollLeft
+    return
+  }
+
   if (!isDragging.value || !timelineContainer.value) return
 
   event.preventDefault()
@@ -4104,6 +4223,13 @@ const handleMouseMove = (event: MouseEvent) => {
 
 // 鼠标抬起结束拖拽
 const handleMouseUp = () => {
+  if (isCreateDragging.value) {
+    finishCreateDrag()
+    document.removeEventListener('mousemove', handleMouseMove)
+    document.removeEventListener('mouseup', handleMouseUp)
+    return
+  }
+
   // 🔧 修复：只有在真正处于拖拽状态时才执行清理
   // 避免 TaskBar 的 resize 事件误触发 Timeline 的拖拽结束逻辑
   if (!isDragging.value) {
@@ -4351,6 +4477,7 @@ onUnmounted(() => {
   // 清理可能残留的鼠标事件监听器
   document.removeEventListener('mousemove', handleMouseMove)
   document.removeEventListener('mouseup', handleMouseUp)
+  isCreateDragging.value = false
 })
 
 const handleTaskDelete = (task: Task, deleteChildren?: boolean) => {
@@ -5198,6 +5325,12 @@ const handleAddSuccessor = (task: Task) => {
           :offset-top="canvasOffsetTop"
         />
 
+        <div
+          v-if="isCreateDragging"
+          class="timeline-create-drag-overlay"
+          :style="createDragOverlayStyle"
+        ></div>
+
         <!-- 年度视图今日标记线 -->
         <div
           v-if="isTodayVisibleInYearView && getTodayLinePositionInYearView >= 0"
@@ -5975,6 +6108,15 @@ const handleAddSuccessor = (task: Task) => {
   position: relative;
   background: var(--gantt-bg-primary, #ffffff);
   transition: background-color 0.3s ease;
+}
+
+.timeline-create-drag-overlay {
+  position: absolute;
+  z-index: 30;
+  border: 1px solid var(--gantt-primary-color, #409eff);
+  background: color-mix(in srgb, var(--gantt-primary-color, #409eff) 22%, transparent);
+  border-radius: 4px;
+  pointer-events: none;
 }
 
 .task-bar-container {

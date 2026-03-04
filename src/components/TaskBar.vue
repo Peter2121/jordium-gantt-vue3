@@ -254,6 +254,14 @@ const barConfig = computed(() => ({
   ...DEFAULT_TASK_BAR_CONFIG,
   ...props.taskBarConfig,
 }))
+const hourSnapMinutes = computed(() => {
+  const raw = Number(barConfig.value.snapMinutes)
+  if (!Number.isFinite(raw)) return 15
+  return Math.max(1, Math.round(raw))
+})
+const minuteSnapAcrossAllScales = computed(
+  () => barConfig.value.snapToGrid === true && barConfig.value.snapAcrossAllScales === true,
+)
 
 const canMoveParentTask = computed(
   () => props.isParent === true && barConfig.value.allowParentTaskMove === true,
@@ -262,8 +270,26 @@ const canResizeParentTask = computed(
   () => props.isParent === true && barConfig.value.allowParentTaskResize === true,
 )
 const isParentTaskbarStyle = computed(
-  () => props.isParent === true && barConfig.value.parentTaskStyle === 'taskbar',
+  () => {
+    if (!(props.isParent === true && barConfig.value.parentTaskStyle === 'taskbar')) {
+      return false
+    }
+
+    const selector = (barConfig.value as any).parentTaskStyleSelector
+    if (typeof selector === 'function') {
+      return selector(props.task)
+    }
+
+    return true
+  },
 )
+const isTaskInteractionLocked = computed(() => {
+  const selector = (barConfig.value as any).lockTaskInteractionSelector
+  if (typeof selector === 'function') {
+    return selector(props.task)
+  }
+  return false
+})
 
 // 日期工具函数 - 处理时区安全的日期创建和操作
 const createLocalDate = (dateString: string | Date | undefined | null): Date | null => {
@@ -315,8 +341,12 @@ const formatDateToLocalString = (date: Date): string => {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
 
-  // 在小时视图中，格式化为包含时间的字符串
-  if (props.currentTimeScale === TimelineScale.HOUR) {
+  // 小时视图、禁用网格吸附、或“所有视图分钟吸附”时，格式化为包含时间的字符串
+  if (
+    props.currentTimeScale === TimelineScale.HOUR ||
+    barConfig.value.snapToGrid === false ||
+    minuteSnapAcrossAllScales.value
+  ) {
     const hour = String(date.getHours()).padStart(2, '0')
     const minute = String(date.getMinutes()).padStart(2, '0')
     return `${year}-${month}-${day} ${hour}:${minute}`
@@ -326,8 +356,8 @@ const formatDateToLocalString = (date: Date): string => {
 }
 
 const addDaysToLocalDate = (date: Date, days: number): Date => {
-  const result = new Date(date)
-  result.setDate(result.getDate() + days)
+  const result = new Date(date.getTime())
+  result.setTime(result.getTime() + days * 24 * 60 * 60 * 1000)
   return result
 }
 
@@ -336,6 +366,32 @@ const addMinutesToDate = (date: Date, minutes: number): Date => {
   const result = new Date(date)
   result.setMinutes(result.getMinutes() + minutes)
   return result
+}
+
+const snapDateToMinuteStep = (date: Date): Date => {
+  if (barConfig.value.snapToGrid !== true) return date
+  const stepMs = hourSnapMinutes.value * 60 * 1000
+  return new Date(Math.round(date.getTime() / stepMs) * stepMs)
+}
+
+const dateFromContinuousPosition = (pixelPosition: number): Date => {
+  const base = new Date(props.startDate)
+  const pixelsPerMinute = props.dayWidth / (24 * 60)
+  const minuteOffset = pixelsPerMinute > 0 ? pixelPosition / pixelsPerMinute : 0
+  return addMinutesToDate(base, minuteOffset)
+}
+
+const getTaskDurationMinutes = (): number => {
+  const originalStartDate = createLocalDate(props.task.startDate) || props.startDate
+  const originalEndDate = createLocalDate(props.task.endDate) || props.startDate
+
+  if (props.task.startDate && !props.task.startDate.includes(' ')) {
+    const timeDiffMs = originalEndDate.getTime() - originalStartDate.getTime()
+    const daysDiff = Math.max(1, Math.round(timeDiffMs / (1000 * 60 * 60 * 24)) + 1)
+    return daysDiff * 24 * 60
+  }
+
+  return Math.max(1, getMinutesDiff(originalStartDate, originalEndDate))
 }
 
 // 新增：计算两个日期之间的分钟差
@@ -536,33 +592,61 @@ const taskBarStyle = computed(() => {
     left = Math.max(0, startMinutesTotal * pixelPerMinute)
     width = Math.max(4, (endMinutesTotal - startMinutesTotal) * pixelPerMinute) // 确保最小4px宽度
   } else {
-    // 日视图、周视图、月视图、年视图：只考虑日期部分，忽略时间部分
+    // 日/周/月/季/年视图
+    // snapToGrid=false 或启用全视图分钟吸附时，使用连续时间计算
+    if (barConfig.value.snapToGrid === false || minuteSnapAcrossAllScales.value) {
+      const dayMs = 24 * 60 * 60 * 1000
+      const baseMs = renderBaseStart.getTime()
+      const startDateForRender = minuteSnapAcrossAllScales.value
+        ? snapDateToMinuteStep(renderStartDate)
+        : renderStartDate
+      const endDateForRender = minuteSnapAcrossAllScales.value
+        ? snapDateToMinuteStep(renderEndDate)
+        : renderEndDate
+      const startMs = startDateForRender.getTime()
+      let endMs = endDateForRender.getTime()
 
-    // 将日期标准化为当天的00:00:00，忽略时间部分
-    const startDateOnly = new Date(
-      renderStartDate.getFullYear(),
-      renderStartDate.getMonth(),
-      renderStartDate.getDate(),
-    )
-    const endDateOnly = new Date(
-      renderEndDate.getFullYear(),
-      renderEndDate.getMonth(),
-      renderEndDate.getDate(),
-    )
-    const baseStartOnly = new Date(
-      renderBaseStart.getFullYear(),
-      renderBaseStart.getMonth(),
-      renderBaseStart.getDate(),
-    )
+      const endRaw = typeof currentEndDate === 'string' ? currentEndDate.trim() : ''
+      const isEndDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(endRaw)
+      if (isEndDateOnly) {
+        // 纯日期 endDate 视为包含整天（与原有日级语义兼容）
+        endMs += dayMs
+      }
 
-    if (
-      props.timelineData &&
-      props.currentTimeScale &&
-      (props.currentTimeScale === TimelineScale.WEEK ||
-        props.currentTimeScale === TimelineScale.MONTH ||
-        props.currentTimeScale === TimelineScale.QUARTER ||
-        props.currentTimeScale === TimelineScale.YEAR)
-    ) {
+      if (endMs <= startMs) {
+        endMs = startMs + dayMs
+      }
+
+      left = Math.max(0, ((startMs - baseMs) / dayMs) * props.dayWidth)
+      width = Math.max(4, ((endMs - startMs) / dayMs) * props.dayWidth)
+    } else {
+      // 吸附模式：按日期网格计算位置和宽度
+
+      // 将日期标准化为当天的00:00:00，忽略时间部分
+      const startDateOnly = new Date(
+        renderStartDate.getFullYear(),
+        renderStartDate.getMonth(),
+        renderStartDate.getDate(),
+      )
+      const endDateOnly = new Date(
+        renderEndDate.getFullYear(),
+        renderEndDate.getMonth(),
+        renderEndDate.getDate(),
+      )
+      const baseStartOnly = new Date(
+        renderBaseStart.getFullYear(),
+        renderBaseStart.getMonth(),
+        renderBaseStart.getDate(),
+      )
+
+      if (
+        props.timelineData &&
+        props.currentTimeScale &&
+        (props.currentTimeScale === TimelineScale.WEEK ||
+          props.currentTimeScale === TimelineScale.MONTH ||
+          props.currentTimeScale === TimelineScale.QUARTER ||
+          props.currentTimeScale === TimelineScale.YEAR)
+      ) {
       // v1.9.6 Phase1 - 优先使用缓存查询（O(1)），提升性能
       // 周/月/季/年视图：从O(n)遍历优化为O(1)查表
       let startPosition: number
@@ -630,12 +714,12 @@ const taskBarStyle = computed(() => {
           ) + dayWidth
       }
 
-      left = startPosition
-      width = Math.max(endPosition - startPosition, 4) // 确保最小4px宽度
-    } else if (
-      props.timelineData &&
-      props.currentTimeScale === TimelineScale.DAY
-    ) {
+        left = startPosition
+        width = Math.max(endPosition - startPosition, 4) // 确保最小4px宽度
+      } else if (
+        props.timelineData &&
+        props.currentTimeScale === TimelineScale.DAY
+      ) {
       // v1.9.6 Phase1 - 日视图也使用缓存优化
       let startPosition: number
       let endPosition: number
@@ -692,9 +776,9 @@ const taskBarStyle = computed(() => {
         ) + 30 // 日视图每天30px
       }
 
-      left = startPosition
-      width = Math.max(endPosition - startPosition, 4) // 确保最小4px宽度
-    } else {
+        left = startPosition
+        width = Math.max(endPosition - startPosition, 4) // 确保最小4px宽度
+      } else {
       // 其他情况（没有 timelineData）：基于日期的简单计算
       const startDiff = Math.floor(
         (startDateOnly.getTime() - baseStartOnly.getTime()) / (1000 * 60 * 60 * 24),
@@ -707,8 +791,9 @@ const taskBarStyle = computed(() => {
       // 如果开始和结束是同一天，duration = 1；否则是实际天数差 + 1（包含结束日期）
       const duration = daysDiff === 0 ? 1 : daysDiff + 1
 
-      left = startDiff * props.dayWidth
-      width = duration * props.dayWidth
+        left = startDiff * props.dayWidth
+        width = duration * props.dayWidth
+      }
     }
   }
 
@@ -1416,7 +1501,8 @@ const handleMouseMove = (e: MouseEvent) => {
         // 使用与任务视图相同的日期计算算法
         let newStartDate: Date | null = null
 
-        if (props.timelineData &&
+        if (!minuteSnapAcrossAllScales.value &&
+            props.timelineData &&
             (props.currentTimeScale === TimelineScale.DAY ||
              props.currentTimeScale === TimelineScale.MONTH ||
              props.currentTimeScale === TimelineScale.QUARTER ||
@@ -1431,18 +1517,16 @@ const handleMouseMove = (e: MouseEvent) => {
 
         if (!newStartDate) {
           // 没有timelineData或计算失败，使用简单算法
-          newStartDate = addDaysToLocalDate(props.startDate, relativeX / props.dayWidth)
+          newStartDate = minuteSnapAcrossAllScales.value
+            ? snapDateToMinuteStep(dateFromContinuousPosition(relativeX))
+            : addDaysToLocalDate(props.startDate, relativeX / props.dayWidth)
         }
 
-        // 计算任务持续时间（天数）
-        const originalStartDate = createLocalDate(props.task.startDate) || props.startDate
-        const originalEndDate = createLocalDate(props.task.endDate) || props.startDate
-        const durationMs = originalEndDate.getTime() - originalStartDate.getTime()
-        const duration = Math.ceil(durationMs / (1000 * 60 * 60 * 24))
+        // 计算任务持续时间（分钟）
+        const durationMinutes = getTaskDurationMinutes()
 
         // 计算新的结束日期
-        const newEndDate = new Date(newStartDate)
-        newEndDate.setDate(newEndDate.getDate() + Math.max(0, duration))
+        const newEndDate = addMinutesToDate(newStartDate, durationMinutes)
 
         // 更新拖拽提示框内容
         dragTooltipContent.value = {
@@ -1461,16 +1545,20 @@ const handleMouseMove = (e: MouseEvent) => {
     }
 
     if (props.currentTimeScale === TimelineScale.HOUR) {
-      // 小时视图：15分钟刻度对齐
+      // 小时视图：分钟刻度对齐（默认15分钟，可配置）
       const pixelPerMinute = 40 / 60 // 每分钟的像素数
-      const pixelPer15Minutes = pixelPerMinute * 15 // 15分钟的像素数
+      const pixelPerSnapMinutes = pixelPerMinute * hourSnapMinutes.value
 
-      // 计算新的左侧位置，对齐到15分钟刻度
+      // 计算新的左侧位置（按需吸附到配置的分钟刻度）
       const newLeftRaw = Math.max(0, dragStartLeft.value + deltaX)
-      const newLeft = Math.round(newLeftRaw / pixelPer15Minutes) * pixelPer15Minutes
+      const newLeft = barConfig.value.snapToGrid
+        ? Math.round(newLeftRaw / pixelPerSnapMinutes) * pixelPerSnapMinutes
+        : newLeftRaw
 
       // 计算新的开始时间（分钟精度）
-      const newStartMinutes = Math.round(newLeft / pixelPerMinute)
+      const newStartMinutes = barConfig.value.snapToGrid
+        ? Math.round(newLeft / pixelPerMinute)
+        : newLeft / pixelPerMinute
       // 确保使用当天的00:00:00作为基准
       const baseStartOfDay = new Date(props.startDate)
       baseStartOfDay.setHours(0, 0, 0, 0)
@@ -1505,7 +1593,7 @@ const handleMouseMove = (e: MouseEvent) => {
         startDate: formatDateToLocalString(newStartDate),
         endDate: formatDateToLocalString(newEndDate),
       }
-    } else if (props.currentTimeScale === TimelineScale.QUARTER) {
+    } else if (props.currentTimeScale === TimelineScale.QUARTER && !minuteSnapAcrossAllScales.value) {
       // 季度视图：直接使用像素位置，保持拖拽跟随鼠标
       const newLeft = Math.max(0, dragStartLeft.value + deltaX)
 
@@ -1519,7 +1607,9 @@ const handleMouseMove = (e: MouseEvent) => {
       const quarterWidth = 60 // 与Timeline.vue保持一致
       const daysInQuarter = 90 // 季度平均天数
       const pixelsPerDay = quarterWidth / daysInQuarter // 约0.67px/天
-      const dayOffset = Math.round(deltaX / pixelsPerDay)
+      const dayOffset = barConfig.value.snapToGrid
+        ? Math.round(deltaX / pixelsPerDay)
+        : deltaX / pixelsPerDay
 
       // 基于原始任务日期计算新日期
       const originalStartDate = createLocalDate(props.task.startDate) || props.startDate
@@ -1549,7 +1639,8 @@ const handleMouseMove = (e: MouseEvent) => {
       // 其他视图（包括日视图、周视图、月视图、季度视图、年度视图）：保持原有逻辑
       const newLeft = Math.max(0, dragStartLeft.value + deltaX)
 
-      // 日视图、月视图、季度视图或年度视图：如果有 timelineData，使用精确计算
+      // 日视图、月视图、季度视图或年度视图：如果有 timelineData，默认使用精确计算
+      // snapToGrid=false 时改用连续像素换算，避免网格吸附
       if (
         (props.currentTimeScale === TimelineScale.DAY ||
           props.currentTimeScale === TimelineScale.MONTH ||
@@ -1557,21 +1648,18 @@ const handleMouseMove = (e: MouseEvent) => {
           props.currentTimeScale === TimelineScale.YEAR) &&
         props.timelineData
       ) {
-        const newStartDate = calculateDateFromPosition(
-          newLeft,
-          props.timelineData,
-          props.currentTimeScale,
-        )
+        const newStartDate = minuteSnapAcrossAllScales.value
+          ? snapDateToMinuteStep(dateFromContinuousPosition(newLeft))
+          : barConfig.value.snapToGrid
+          ? calculateDateFromPosition(
+            newLeft,
+            props.timelineData,
+            props.currentTimeScale,
+          )
+          : addDaysToLocalDate(props.startDate, newLeft / props.dayWidth)
 
         if (newStartDate) {
-          // 计算任务持续天数
-          const originalStartDate = createLocalDate(props.task.startDate) || props.startDate
-          const originalEndDate = createLocalDate(props.task.endDate) || props.startDate
-          const durationMs = originalEndDate.getTime() - originalStartDate.getTime()
-          const duration = Math.ceil(durationMs / (1000 * 60 * 60 * 24))
-
-          const newEndDate = new Date(newStartDate)
-          newEndDate.setDate(newEndDate.getDate() + Math.max(0, duration))
+          const newEndDate = addMinutesToDate(newStartDate, getTaskDurationMinutes())
 
           // 只更新临时数据，不触发事件
           tempTaskData.value = {
@@ -1587,9 +1675,12 @@ const handleMouseMove = (e: MouseEvent) => {
         }
       } else {
         // 其他情况：使用原有的简单计算
-        const newStartDate = addDaysToLocalDate(props.startDate, newLeft / props.dayWidth)
-        const duration = dragStartWidth.value / props.dayWidth
-        const newEndDate = addDaysToLocalDate(newStartDate, duration - 1)
+        const newStartDate = minuteSnapAcrossAllScales.value
+          ? snapDateToMinuteStep(dateFromContinuousPosition(newLeft))
+          : addDaysToLocalDate(props.startDate, newLeft / props.dayWidth)
+        const newEndDate = minuteSnapAcrossAllScales.value
+          ? addMinutesToDate(newStartDate, getTaskDurationMinutes())
+          : addDaysToLocalDate(newStartDate, dragStartWidth.value / props.dayWidth - 1)
 
         // 只更新临时数据，不触发事件
         tempTaskData.value = {
@@ -1608,16 +1699,20 @@ const handleMouseMove = (e: MouseEvent) => {
     const deltaX = e.clientX - resizeStartX.value
 
     if (props.currentTimeScale === TimelineScale.HOUR) {
-      // 小时视图：15分钟刻度对齐
+      // 小时视图：分钟刻度对齐（默认15分钟，可配置）
       const pixelPerMinute = 40 / 60
-      const pixelPer15Minutes = pixelPerMinute * 15
+      const pixelPerSnapMinutes = pixelPerMinute * hourSnapMinutes.value
 
-      // 计算新的左侧位置，对齐到15分钟刻度
+      // 计算新的左侧位置（按需吸附到配置的分钟刻度）
       const newLeftRaw = Math.max(0, resizeStartLeft.value + deltaX)
-      const newLeft = Math.round(newLeftRaw / pixelPer15Minutes) * pixelPer15Minutes
+      const newLeft = barConfig.value.snapToGrid
+        ? Math.round(newLeftRaw / pixelPerSnapMinutes) * pixelPerSnapMinutes
+        : newLeftRaw
 
       // 计算新的开始时间
-      const newStartMinutes = Math.round(newLeft / pixelPerMinute)
+      const newStartMinutes = barConfig.value.snapToGrid
+        ? Math.round(newLeft / pixelPerMinute)
+        : newLeft / pixelPerMinute
       // 确保使用当天的00:00:00作为基准
       const baseStartOfDay = new Date(props.startDate)
       baseStartOfDay.setHours(0, 0, 0, 0)
@@ -1634,7 +1729,7 @@ const handleMouseMove = (e: MouseEvent) => {
         startDate: formatDateToLocalString(newStartDate),
         endDate: props.task.endDate || '',
       }
-    } else if (props.currentTimeScale === TimelineScale.QUARTER) {
+    } else if (props.currentTimeScale === TimelineScale.QUARTER && !minuteSnapAcrossAllScales.value) {
       // 季度视图：左侧resize直接使用像素位置
       const newLeft = Math.max(0, resizeStartLeft.value + deltaX)
       const newWidth = Math.max(10, resizeStartWidth.value - deltaX) // 保持最小宽度
@@ -1649,7 +1744,9 @@ const handleMouseMove = (e: MouseEvent) => {
       const quarterWidth = 60 // 与Timeline.vue保持一致
       const daysInQuarter = 90 // 季度平均天数
       const pixelsPerDay = quarterWidth / daysInQuarter // 约0.67px/天
-      const dayOffset = Math.round(deltaX / pixelsPerDay)
+      const dayOffset = barConfig.value.snapToGrid
+        ? Math.round(deltaX / pixelsPerDay)
+        : deltaX / pixelsPerDay
 
       const originalStartDate = createLocalDate(props.task.startDate) || props.startDate
       const newStartDate = new Date(originalStartDate)
@@ -1670,7 +1767,8 @@ const handleMouseMove = (e: MouseEvent) => {
       // 其他视图（包括日视图、周视图、月视图、季度视图、年度视图）：保持原有逻辑
       const newLeft = Math.max(0, resizeStartLeft.value + deltaX)
 
-      // 日视图、月视图、季度视图或年度视图：如果有 timelineData，使用精确计算
+      // 日视图、月视图、季度视图或年度视图：如果有 timelineData，默认使用精确计算
+      // snapToGrid=false 时改用连续像素换算，避免网格吸附
       if (
         (props.currentTimeScale === TimelineScale.DAY ||
           props.currentTimeScale === TimelineScale.MONTH ||
@@ -1678,11 +1776,15 @@ const handleMouseMove = (e: MouseEvent) => {
           props.currentTimeScale === TimelineScale.YEAR) &&
         props.timelineData
       ) {
-        const newStartDate = calculateDateFromPosition(
-          newLeft,
-          props.timelineData,
-          props.currentTimeScale,
-        )
+        const newStartDate = minuteSnapAcrossAllScales.value
+          ? snapDateToMinuteStep(dateFromContinuousPosition(newLeft))
+          : barConfig.value.snapToGrid
+          ? calculateDateFromPosition(
+            newLeft,
+            props.timelineData,
+            props.currentTimeScale,
+          )
+          : addDaysToLocalDate(props.startDate, newLeft / props.dayWidth)
 
         if (newStartDate) {
           // 只更新临时数据，不触发事件
@@ -1699,7 +1801,9 @@ const handleMouseMove = (e: MouseEvent) => {
         }
       } else {
         // 其他情况：使用原有的简单计算
-        const newStartDate = addDaysToLocalDate(props.startDate, newLeft / props.dayWidth)
+        const newStartDate = minuteSnapAcrossAllScales.value
+          ? snapDateToMinuteStep(dateFromContinuousPosition(newLeft))
+          : addDaysToLocalDate(props.startDate, newLeft / props.dayWidth)
 
         // 只更新临时数据，不触发事件
         tempTaskData.value = {
@@ -1718,16 +1822,20 @@ const handleMouseMove = (e: MouseEvent) => {
     const deltaX = e.clientX - resizeStartX.value
 
     if (props.currentTimeScale === TimelineScale.HOUR) {
-      // 小时视图：15分钟刻度对齐
+      // 小时视图：分钟刻度对齐（默认15分钟，可配置）
       const pixelPerMinute = 40 / 60
-      const pixelPer15Minutes = pixelPerMinute * 15
+      const pixelPerSnapMinutes = pixelPerMinute * hourSnapMinutes.value
 
-      // 计算新的宽度，对齐到15分钟刻度
-      const newWidthRaw = Math.max(pixelPer15Minutes, resizeStartWidth.value + deltaX)
-      const newWidth = Math.round(newWidthRaw / pixelPer15Minutes) * pixelPer15Minutes
+      // 计算新的宽度（按需吸附到配置的分钟刻度）
+      const newWidthRaw = Math.max(pixelPerSnapMinutes, resizeStartWidth.value + deltaX)
+      const newWidth = barConfig.value.snapToGrid
+        ? Math.round(newWidthRaw / pixelPerSnapMinutes) * pixelPerSnapMinutes
+        : newWidthRaw
 
       // 计算新的持续时间（分钟）
-      const newDurationMinutes = Math.round(newWidth / pixelPerMinute)
+      const newDurationMinutes = barConfig.value.snapToGrid
+        ? Math.round(newWidth / pixelPerMinute)
+        : newWidth / pixelPerMinute
 
       // 计算新的结束时间
       const originalStartDate = createLocalDate(props.task.startDate) || props.startDate
@@ -1744,7 +1852,7 @@ const handleMouseMove = (e: MouseEvent) => {
         startDate: props.task.startDate || '',
         endDate: formatDateToLocalString(newEndDate),
       }
-    } else if (props.currentTimeScale === TimelineScale.QUARTER) {
+    } else if (props.currentTimeScale === TimelineScale.QUARTER && !minuteSnapAcrossAllScales.value) {
       // 季度视图：右侧resize直接使用像素位置
       const newWidth = Math.max(10, resizeStartWidth.value + deltaX) // 保持最小宽度
 
@@ -1758,7 +1866,9 @@ const handleMouseMove = (e: MouseEvent) => {
       const quarterWidth = 60 // 与Timeline.vue保持一致
       const daysInQuarter = 90 // 季度平均天数
       const pixelsPerDay = quarterWidth / daysInQuarter // 约0.67px/天
-      const dayOffset = Math.round(deltaX / pixelsPerDay)
+      const dayOffset = barConfig.value.snapToGrid
+        ? Math.round(deltaX / pixelsPerDay)
+        : deltaX / pixelsPerDay
 
       const originalEndDate = createLocalDate(props.task.endDate) || props.startDate
       const newEndDate = new Date(originalEndDate)
@@ -1777,9 +1887,13 @@ const handleMouseMove = (e: MouseEvent) => {
       }
     } else {
       // 其他视图（包括日视图、周视图、月视图、季度视图、年度视图）：保持原有逻辑
-      const newWidth = Math.max(props.dayWidth, resizeStartWidth.value + deltaX)
+      const minWidth = minuteSnapAcrossAllScales.value
+        ? Math.max(1, (props.dayWidth / (24 * 60)) * hourSnapMinutes.value)
+        : props.dayWidth
+      const newWidth = Math.max(minWidth, resizeStartWidth.value + deltaX)
 
-      // 日视图、月视图、季度视图或年度视图：如果有 timelineData，使用精确计算
+      // 日视图、月视图、季度视图或年度视图：如果有 timelineData，默认使用精确计算
+      // snapToGrid=false 时改用连续像素换算，避免网格吸附
       if (
         (props.currentTimeScale === TimelineScale.DAY ||
           props.currentTimeScale === TimelineScale.MONTH ||
@@ -1789,11 +1903,15 @@ const handleMouseMove = (e: MouseEvent) => {
       ) {
         // 计算新的结束位置（左侧位置 + 新宽度）
         const newRightPosition = resizeStartLeft.value + newWidth
-        const newEndDate = calculateDateFromPosition(
-          newRightPosition,
-          props.timelineData,
-          props.currentTimeScale,
-        )
+        const newEndDate = minuteSnapAcrossAllScales.value
+          ? snapDateToMinuteStep(dateFromContinuousPosition(newRightPosition))
+          : barConfig.value.snapToGrid
+          ? calculateDateFromPosition(
+            newRightPosition,
+            props.timelineData,
+            props.currentTimeScale,
+          )
+          : addDaysToLocalDate(props.startDate, newRightPosition / props.dayWidth)
 
         if (newEndDate) {
           // 只更新临时数据，不触发事件
@@ -1810,11 +1928,12 @@ const handleMouseMove = (e: MouseEvent) => {
         }
       } else {
         // 其他情况：使用原有的简单计算
-        const newDurationDays = newWidth / props.dayWidth
-        const newEndDate = addDaysToLocalDate(
-          props.startDate,
-          resizeStartLeft.value / props.dayWidth + newDurationDays - 1,
-        )
+        const newEndDate = minuteSnapAcrossAllScales.value
+          ? snapDateToMinuteStep(dateFromContinuousPosition(resizeStartLeft.value + newWidth))
+          : addDaysToLocalDate(
+            props.startDate,
+            resizeStartLeft.value / props.dayWidth + newWidth / props.dayWidth - 1,
+          )
 
         // 只更新临时数据，不触发事件
         tempTaskData.value = {
@@ -2806,10 +2925,12 @@ const formatDisplayDate = (dateStr: string | undefined): string => {
   const date = createLocalDate(dateStr)
   if (!date) return t('dateNotSet')
 
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const year = date.getFullYear()
+  const hour = String(date.getHours()).padStart(2, '0')
+  const minute = String(date.getMinutes()).padStart(2, '0')
+  return `${day}.${month}.${year} ${hour}:${minute}`
 }
 
 // 计算工时信息
@@ -3363,7 +3484,7 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
         class="actual-task-name-wrapper"
         :style="{
           fontSize: '12px',
-          color: taskStatus.color,
+          color: (task as any).textColor || taskStatus.color,
         }"
       >
         <slot v-if="hasContentSlot" name="custom-task-content" v-bind="slotPayload" />
@@ -3387,8 +3508,10 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
         borderTopStyle: 'solid',
         borderTopColor: currentResourceColor,
       } : {}),
-      color: taskStatus.color,
-      cursor: isCompleted
+      color: (task as any).textColor || taskStatus.color,
+      cursor: isTaskInteractionLocked
+        ? 'default'
+        : isCompleted
         ? 'default'
         : (isParent
             ? (canMoveParentTask ? 'move' : 'default')
@@ -3430,7 +3553,10 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
     <div
       v-if="isParent"
       class="parent-label-inner"
-      :style="{ cursor: canMoveParentTask ? 'move' : 'default' }"
+      :style="{
+        cursor: canMoveParentTask ? 'move' : 'default',
+        color: (task as any).textColor || 'white',
+      }"
       @mousedown="
         e => {
           if (!canMoveParentTask) return
@@ -3439,7 +3565,16 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
       "
     >
       <slot v-if="hasContentSlot" name="custom-task-content" v-bind="slotPayload" />
-      <template v-else> {{ task.name }} ({{ task.progress || 0 }}%) </template>
+      <template v-else>
+        <span class="task-inline-label">
+          <sl-spinner
+            v-if="(task as any).isSaving"
+            class="task-inline-spinner"
+            style="font-size: 12px;"
+          ></sl-spinner>
+          <span>{{ task.name }}</span>
+        </span>
+      </template>
     </div>
 
     <!-- 完成进度条（非父级任务） -->
@@ -3476,6 +3611,7 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
     <div
       v-if="
         !isCompleted &&
+        !isTaskInteractionLocked &&
         (!isParent || canResizeParentTask) &&
         !isInteractionDisabled &&
         props.allowDragAndResize !== false &&
@@ -3493,6 +3629,7 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
       class="task-bar-content"
       :style="{
         cursor:
+          isTaskInteractionLocked ||
           isInteractionDisabled ||
           props.allowDragAndResize === false ||
           isHighlighted ||
@@ -3507,7 +3644,7 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
             return
           }
           // 禁用交互时也不处理
-          if (isInteractionDisabled || props.allowDragAndResize === false) {
+          if (isTaskInteractionLocked || isInteractionDisabled || props.allowDragAndResize === false) {
             return
           }
           // 正常拖拽
@@ -3553,6 +3690,11 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
       >
         <slot v-if="hasContentSlot" name="custom-task-content" v-bind="slotPayload" />
         <div v-else class="task-name">
+          <sl-spinner
+            v-if="(task as any).isSaving"
+            class="task-inline-spinner"
+            style="font-size: 12px;"
+          ></sl-spinner>
           {{ task.name }}
           <!-- v1.9.0 资源视图：显示占比文字 -->
           <!--<span v-if="shouldShowPercentText" class="resource-capacity-text">
@@ -3575,6 +3717,7 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
     <div
       v-if="
         !isCompleted &&
+        !isTaskInteractionLocked &&
         (!isParent || canResizeParentTask) &&
         !isInteractionDisabled &&
         props.allowDragAndResize !== false &&
@@ -3681,6 +3824,7 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
       :style="{
         left: `${tooltipPosition.x}px`,
         top: `${tooltipPosition.y}px`,
+        '--task-tooltip-text-color': (task as any).textColor || '#ffffff',
       }"
     >
       <div class="tooltip-arrow"></div>
@@ -3727,6 +3871,7 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
       :style="{
         left: `${dragTooltipPosition.x}px`,
         top: `${dragTooltipPosition.y}px`,
+        '--task-tooltip-text-color': (task as any).textColor || '#ffffff',
       }"
     >
       <div class="drag-tooltip-content">
@@ -3770,6 +3915,7 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
         left: `${hoverTooltipPosition.x}px`,
         top: `${hoverTooltipPosition.y}px`,
         backgroundColor: taskStatus.color,
+        '--task-tooltip-text-color': (task as any).textColor || '#ffffff',
       }"
     >
       <div
@@ -4446,6 +4592,9 @@ class="hover-tooltip-arrow" :style="{
 }
 
 .task-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   white-space: nowrap;
   overflow: visible;
   line-height: 1.2;
@@ -4453,6 +4602,16 @@ class="hover-tooltip-arrow" :style="{
   font-weight: 700; /* 加粗显示 */
   z-index: 10;
   /* 移除背景样式，保持原始状态 */
+}
+
+.task-inline-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-inline-spinner {
+  flex: 0 0 auto;
 }
 
 /* v1.9.0 资源占比文字样式 */
@@ -4746,7 +4905,7 @@ class="hover-tooltip-arrow" :style="{
 .task-tooltip {
   position: fixed;
   background: rgba(0, 0, 0, 0.9);
-  color: white;
+  color: var(--task-tooltip-text-color, #ffffff);
   padding: 12px;
   border-radius: 8px;
   font-size: 12px;
@@ -4766,7 +4925,7 @@ class="hover-tooltip-arrow" :style="{
   margin-bottom: 8px;
   padding-bottom: 6px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-  color: #ffffff;
+  color: var(--task-tooltip-text-color, #ffffff);
 }
 
 .tooltip-content {
@@ -4785,13 +4944,13 @@ class="hover-tooltip-arrow" :style="{
 .tooltip-label {
   opacity: 0.8;
   min-width: 60px;
-  color: #e5e5e5;
+  color: var(--task-tooltip-text-color, #ffffff);
 }
 
 .tooltip-value {
   font-weight: 600;
   text-align: right;
-  color: #ffffff;
+  color: var(--task-tooltip-text-color, #ffffff);
 }
 
 /* v1.9.0 Tooltip警告行样式 */
@@ -4811,7 +4970,7 @@ class="hover-tooltip-arrow" :style="{
 .drag-tooltip {
   position: fixed;
   background: rgba(0, 123, 255, 0.95);
-  color: white;
+  color: var(--task-tooltip-text-color, #ffffff);
   padding: 8px 12px;
   border-radius: 6px;
   font-size: 12px;
@@ -4876,7 +5035,7 @@ class="hover-tooltip-arrow" :style="{
 .task-hover-tooltip {
   position: fixed;
   background-color: rgba(0, 0, 0, 0.85);
-  color: white;
+  color: var(--task-tooltip-text-color, #ffffff);
   padding: 10px 14px;
   border-radius: 6px;
   font-size: 12px;

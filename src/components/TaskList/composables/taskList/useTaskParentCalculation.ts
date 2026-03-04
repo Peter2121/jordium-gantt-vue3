@@ -73,6 +73,11 @@ export function updateParentTasksData(tasks: Task[] | undefined) {
         // 先更新子任务
         updateParentTask(task.children)
 
+        // Allow callers to keep parent ranges fixed (e.g. project root).
+        if ((task as any).lockDateRange === true) {
+          return
+        }
+
         // 计算父级任务的进度和日期范围
         const parentData = calculateParentTaskData(task)
         task.progress = parentData.progress

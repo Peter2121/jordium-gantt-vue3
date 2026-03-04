@@ -36,6 +36,7 @@ export interface TaskListConfig {
   defaultWidth?: number | string // 默认展开宽度，支持像素数字（如 320）或百分比字符串（如 '30%'），默认320px
   minWidth?: number | string // 最小宽度，支持像素数字（如 280）或百分比字符串（如 '20%'），默认280px，不能小于280px
   maxWidth?: number | string // 最大宽度，支持像素数字（如 1160）或百分比字符串（如 '80%'），默认1160px
+  allowMinWidthBelowDefault?: boolean // 允许小于默认最小宽度（280px）
 }
 
 // 默认宽度配置

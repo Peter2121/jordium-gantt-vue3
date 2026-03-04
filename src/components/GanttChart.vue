@@ -73,6 +73,9 @@ const props = withDefaults(defineProps<Props>(), {
   autoCenterToday: true,
   timelineStartDate: undefined,
   timelineEndDate: undefined,
+  enableCreateByDrag: false,
+  createByDragRequireShift: false,
+  createByDragMinWidthPx: 6,
   fullscreen: false,
   expandAll: true,
   locale: 'zh-CN',
@@ -112,6 +115,7 @@ const emit = defineEmits([
   // v1.9.0 资源视图事件
   'taskbar-resource-change', // 任务跨资源移动事件
   'resource-drag-end', // v1.9.0 资源视图垂直拖拽结束事件
+  'timeline-drag-create-end', // 时间轴拖拽创建结束事件
 ])
 
 // 根元素引用
@@ -535,6 +539,12 @@ interface Props {
   // Optionaler, fester Zeitbereich für die Timeline
   timelineStartDate?: Date | string
   timelineEndDate?: Date | string
+  // 是否启用在时间轴空白区域拖拽创建任务
+  enableCreateByDrag?: boolean
+  // 是否要求按住 Shift 才触发拖拽创建
+  createByDragRequireShift?: boolean
+  // 拖拽创建最小像素宽度
+  createByDragMinWidthPx?: number
   // 自定义任务状态背景色（优先级高于默认配色，低于Task.barColor）
   // 待处理任务背景色：任务未开始且未逾期时使用
   pendingTaskBackgroundColor?: string
@@ -643,7 +653,10 @@ const getTaskListMinWidth = () => {
     ganttContainerWidth.value,
     DEFAULT_TASK_LIST_MIN_WIDTH,
   )
-  return Math.max(configMinWidth, DEFAULT_TASK_LIST_MIN_WIDTH) // 确保不小于280px
+  if (props.taskListConfig?.allowMinWidthBelowDefault === true) {
+    return Math.max(configMinWidth, 80)
+  }
+  return Math.max(configMinWidth, DEFAULT_TASK_LIST_MIN_WIDTH) // 默认确保不小于280px
 }
 
 // TaskList最大宽度，支持通过taskListConfig配置（支持像素和百分比）
@@ -1587,6 +1600,11 @@ const tasksForTimeline = computed(() => {
 
         // 如果是父任务且有子任务，重新计算时间范围
         if (isParent && updatedTask.children && updatedTask.children.length > 0) {
+          // Allow callers to keep a parent range fixed (e.g. project root).
+          if ((updatedTask as any).lockDateRange === true) {
+            return updatedTask
+          }
+
           const { startDate, endDate } = calculateParentDateRange(updatedTask)
           updatedTask = {
             ...updatedTask,
@@ -3254,6 +3272,17 @@ function handleResourceDragEnd(event: { task: Task; sourceResourceIndex: number;
   emit('resource-drag-end', event)
 }
 
+function handleTimelineDragCreateEnd(event: {
+  task: Task
+  startDate: string
+  endDate: string
+  startMs: number
+  endMs: number
+  scale: TimelineScale
+}) {
+  emit('timeline-drag-create-end', event)
+}
+
 // 处理里程碑双击事件
 function handleMilestoneDoubleClick(milestone: Milestone) {
   // 先触发外部事件，让外部可以自定义处理
@@ -3437,6 +3466,9 @@ defineExpose({
           :use-default-milestone-dialog="props.useDefaultMilestoneDialog"
           :on-milestone-save="handleMilestoneSave"
           :auto-center-today="props.autoCenterToday"
+          :enable-create-by-drag="props.enableCreateByDrag"
+          :create-by-drag-require-shift="props.createByDragRequireShift"
+          :create-by-drag-min-width-px="props.createByDragMinWidthPx"
           @timeline-scale-changed="handleTimelineScaleChanged"
           @click-task="handleTimelineClickTask"
           @edit-task="handleTimelineEditTask"
@@ -3450,6 +3482,7 @@ defineExpose({
           @delete="handleTaskDelete"
           @link-deleted="handleLinkDeleted"
           @resource-drag-end="handleResourceDragEnd"
+          @timeline-drag-create-end="handleTimelineDragCreateEnd"
         >
           <template v-if="$slots['custom-task-content']" #custom-task-content="barScope">
             <slot name="custom-task-content" v-bind="barScope" />
@@ -3542,7 +3575,7 @@ defineExpose({
 
 .gantt-panel-left {
   /* width 由js控制 */
-  min-width: 320px;
+  min-width: 0;
   transition: width 0.1s;
 }
 
