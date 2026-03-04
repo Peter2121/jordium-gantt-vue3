@@ -70,6 +70,9 @@ const props = withDefaults(defineProps<Props>(), {
   enableTaskBarTooltip: true,
   showConflicts: true,
   showTaskbarTab: true,
+  autoCenterToday: true,
+  timelineStartDate: undefined,
+  timelineEndDate: undefined,
   fullscreen: false,
   expandAll: true,
   locale: 'zh-CN',
@@ -527,6 +530,11 @@ interface Props {
   // v1.9.5 是否显示TaskBar上的资源Tab标签（默认为 true）
   // 当设置为 false 时，资源视图下TaskBar不显示资源分配Tab标签
   showTaskbarTab?: boolean
+  // 是否自动将时间线滚动到今天（默认为 true）
+  autoCenterToday?: boolean
+  // Optionaler, fester Zeitbereich für die Timeline
+  timelineStartDate?: Date | string
+  timelineEndDate?: Date | string
   // 自定义任务状态背景色（优先级高于默认配色，低于Task.barColor）
   // 待处理任务背景色：任务未开始且未逾期时使用
   pendingTaskBackgroundColor?: string
@@ -1659,6 +1667,15 @@ const milestonesForTimeline = computed((): Milestone[] => {
 
 // 计算所有任务和里程碑的最小开始时间和最大结束时间
 const timelineDateRange = computed(() => {
+  // Priority: explicit timeline range from props
+  if (props.timelineStartDate && props.timelineEndDate) {
+    const min = new Date(props.timelineStartDate)
+    const max = new Date(props.timelineEndDate)
+    if (!Number.isNaN(min.getTime()) && !Number.isNaN(max.getTime()) && min <= max) {
+      return { min, max }
+    }
+  }
+
   // 触发器依赖：确保拖拽/拉伸后会重新计算
   // eslint-disable-next-line @typescript-eslint/no-unused-expressions
   updateTaskTrigger.value
@@ -3406,6 +3423,7 @@ defineExpose({
           :milestones="milestonesForTimeline"
           :start-date="timelineDateRange.min"
           :end-date="timelineDateRange.max"
+          :fixed-range="Boolean(props.timelineStartDate && props.timelineEndDate)"
           :working-hours="props.workingHours"
           :task-bar-config="props.taskBarConfig"
           :allow-drag-and-resize="props.allowDragAndResize"
@@ -3418,6 +3436,7 @@ defineExpose({
           :use-default-drawer="props.useDefaultDrawer"
           :use-default-milestone-dialog="props.useDefaultMilestoneDialog"
           :on-milestone-save="handleMilestoneSave"
+          :auto-center-today="props.autoCenterToday"
           @timeline-scale-changed="handleTimelineScaleChanged"
           @click-task="handleTimelineClickTask"
           @edit-task="handleTimelineEditTask"

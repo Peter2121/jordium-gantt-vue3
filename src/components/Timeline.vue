@@ -52,6 +52,10 @@ interface Props {
   delayTaskBackgroundColor?: string
   completeTaskBackgroundColor?: string
   ongoingTaskBackgroundColor?: string
+  // 是否自动将时间线滚动到今天
+  autoCenterToday?: boolean
+  // 是否固定时间范围（由外部控制startDate/endDate，内部不再自动改写）
+  fixedRange?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -76,6 +80,8 @@ const props = withDefaults(defineProps<Props>(), {
   delayTaskBackgroundColor: undefined,
   completeTaskBackgroundColor: undefined,
   ongoingTaskBackgroundColor: undefined,
+  autoCenterToday: true,
+  fixedRange: false,
 })
 
 // 定义emits
@@ -2691,6 +2697,16 @@ const updateTimeScale = (scale: TimelineScale) => {
   // 清除缓存，确保使用新的时间刻度数据
   clearTimelineCache()
 
+  if (props.fixedRange) {
+    timelineData.value = generateTimelineData()
+    nextTick(() => {
+      emit('timeline-scale-changed', scale)
+      window.dispatchEvent(new CustomEvent('timeline-scale-updated'))
+    })
+    perfMonitor2.end(`updateTimeScale-${scale}`)
+    return
+  }
+
   // 如果是小时视图或日视图，更新时间线配置
   if (scale === TimelineScale.HOUR) {
     const hourRange = getHourTimelineRange()
@@ -2783,7 +2799,9 @@ const updateTimeScale = (scale: TimelineScale) => {
 
       // 4. 视图切换完成后，定位到今日
       setTimeout(() => {
-        scrollToTodayCenter()
+        if (props.autoCenterToday) {
+          scrollToTodayCenter()
+        }
 
         perfMonitor2.end(`updateTimeScale-${scale}`)
         perfMonitor2.report()
@@ -2841,7 +2859,7 @@ let hasInitialAutoScroll = false
 watch(
   () => [timelineData.value, timelineConfig.value.startDate, timelineConfig.value.endDate],
   () => {
-    if (!hasInitialAutoScroll) {
+    if (!hasInitialAutoScroll && props.autoCenterToday) {
       nextTick(() => {
         scrollToTodayCenter()
         hasInitialAutoScroll = true
@@ -3630,9 +3648,11 @@ const handleMilestoneDragEnd = (updatedMilestone: Milestone) => {
 onMounted(() => {
   // 等待下一帧，确保DOM和数据都已渲染
   nextTick(() => {
-    setTimeout(() => {
-      scrollToTodayCenter()
-    }, 60) // 增加延迟，确保宽度和数据都已渲染
+    if (props.autoCenterToday) {
+      setTimeout(() => {
+        scrollToTodayCenter()
+      }, 60) // 增加延迟，确保宽度和数据都已渲染
+    }
   })
   // 监听TaskList的双击事件
   window.addEventListener('task-row-double-click', handleTaskListDoubleClick as EventListener)
@@ -3742,7 +3762,9 @@ onMounted(() => {
   // 页面加载后，直接将今日定位到中间
   // 增加延迟时间，确保DOM元素渲染完成
   setTimeout(() => {
-    scrollToTodayCenter()
+    if (props.autoCenterToday) {
+      scrollToTodayCenter()
+    }
     updateSvgSize()
   }, 200)
   window.addEventListener('resize', updateSvgSize)
@@ -4527,6 +4549,11 @@ const updateTimelineRange = () => {
   // 避免滚动时重新生成timelineData导致header闪烁
   // 虚拟滚动通过visibleTimeRange过滤TaskBar即可
   if (viewMode.value === 'resource') {
+    return
+  }
+
+  // 外部固定时间范围时，不允许内部自动改写时间区间
+  if (props.fixedRange) {
     return
   }
 
