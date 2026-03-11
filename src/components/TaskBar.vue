@@ -259,6 +259,15 @@ const hourSnapMinutes = computed(() => {
   if (!Number.isFinite(raw)) return 15
   return Math.max(1, Math.round(raw))
 })
+const isSubDayScale = computed(
+  () =>
+    props.currentTimeScale === TimelineScale.HOUR ||
+    props.currentTimeScale === TimelineScale.HOUR3,
+)
+const subDayCellMinutes = computed(() =>
+  props.currentTimeScale === TimelineScale.HOUR3 ? 3 * 60 : 60,
+)
+const subDayPixelPerMinute = computed(() => 40 / subDayCellMinutes.value)
 const minuteSnapAcrossAllScales = computed(
   () => barConfig.value.snapToGrid === true && barConfig.value.snapAcrossAllScales === true,
 )
@@ -343,7 +352,7 @@ const formatDateToLocalString = (date: Date): string => {
 
   // 小时视图、禁用网格吸附、或“所有视图分钟吸附”时，格式化为包含时间的字符串
   if (
-    props.currentTimeScale === TimelineScale.HOUR ||
+    isSubDayScale.value ||
     barConfig.value.snapToGrid === false ||
     minuteSnapAcrossAllScales.value
   ) {
@@ -551,7 +560,7 @@ const taskBarStyle = computed(() => {
     } else {
       width = props.dayWidth // 默认宽度
     }
-  } else if (props.currentTimeScale === TimelineScale.HOUR) {
+  } else if (isSubDayScale.value) {
     // 小时视图：按分钟精确计算位置（需要考虑时间部分）
     // 计算时间线开始日期的00:00:00作为全局基准
     const timelineStartOfDay = new Date(renderBaseStart)
@@ -585,8 +594,8 @@ const taskBarStyle = computed(() => {
     const startMinutesTotal = getMinutesDiff(timelineStartOfDay, adjustedStartDate)
     const endMinutesTotal = getMinutesDiff(timelineStartOfDay, adjustedEndDate)
 
-    // 每小时40px，每分钟40/60 = 2/3 px
-    const pixelPerMinute = 40 / 60
+    // hour=每小时40px, hour3=每3小时40px
+    const pixelPerMinute = subDayPixelPerMinute.value
 
     // 位置和宽度计算
     left = Math.max(0, startMinutesTotal * pixelPerMinute)
@@ -1544,9 +1553,9 @@ const handleMouseMove = (e: MouseEvent) => {
       return
     }
 
-    if (props.currentTimeScale === TimelineScale.HOUR) {
+    if (isSubDayScale.value) {
       // 小时视图：分钟刻度对齐（默认15分钟，可配置）
-      const pixelPerMinute = 40 / 60 // 每分钟的像素数
+      const pixelPerMinute = subDayPixelPerMinute.value // 每分钟的像素数
       const pixelPerSnapMinutes = pixelPerMinute * hourSnapMinutes.value
 
       // 计算新的左侧位置（按需吸附到配置的分钟刻度）
@@ -1698,9 +1707,9 @@ const handleMouseMove = (e: MouseEvent) => {
   } else if (isResizingLeft.value) {
     const deltaX = e.clientX - resizeStartX.value
 
-    if (props.currentTimeScale === TimelineScale.HOUR) {
+    if (isSubDayScale.value) {
       // 小时视图：分钟刻度对齐（默认15分钟，可配置）
-      const pixelPerMinute = 40 / 60
+      const pixelPerMinute = subDayPixelPerMinute.value
       const pixelPerSnapMinutes = pixelPerMinute * hourSnapMinutes.value
 
       // 计算新的左侧位置（按需吸附到配置的分钟刻度）
@@ -1821,9 +1830,9 @@ const handleMouseMove = (e: MouseEvent) => {
   } else if (isResizingRight.value) {
     const deltaX = e.clientX - resizeStartX.value
 
-    if (props.currentTimeScale === TimelineScale.HOUR) {
+    if (isSubDayScale.value) {
       // 小时视图：分钟刻度对齐（默认15分钟，可配置）
-      const pixelPerMinute = 40 / 60
+      const pixelPerMinute = subDayPixelPerMinute.value
       const pixelPerSnapMinutes = pixelPerMinute * hourSnapMinutes.value
 
       // 计算新的宽度（按需吸附到配置的分钟刻度）
@@ -3761,7 +3770,7 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
 
     <!-- 半圆气泡指示器 - 只在 TaskBar 完全消失时显示 -->
     <div
-      v-if="bubbleIndicator.show && !isParent"
+      v-if="bubbleIndicator.show"
       class="bubble-indicator"
       :class="[
         `bubble-${bubbleIndicator.side}`,

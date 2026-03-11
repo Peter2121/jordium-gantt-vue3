@@ -370,6 +370,7 @@ const handleFullscreenToggle = () => {
 // 时间刻度配置映射
 const timeScaleMap = {
   hour: { value: TimelineScale.HOUR, label: () => t('timeScaleHour') },
+  hour3: { value: TimelineScale.HOUR3, label: () => t('timeScale3Hours') },
   day: { value: TimelineScale.DAY, label: () => t('timeScaleDay') },
   week: { value: TimelineScale.WEEK, label: () => t('timeScaleWeek') },
   month: { value: TimelineScale.MONTH, label: () => t('timeScaleMonth') },
@@ -378,7 +379,7 @@ const timeScaleMap = {
 }
 
 type TimeScaleKey = keyof typeof timeScaleMap
-const defaultScaleKeys: TimeScaleKey[] = ['hour', 'day', 'week', 'month', 'year']
+const defaultScaleKeys: TimeScaleKey[] = ['hour', 'hour3', 'day', 'week', 'month', 'year']
 
 // 获取可用的时间刻度维度
 const availableTimeScales = computed<TimeScaleKey[]>(() => {

@@ -95,7 +95,7 @@ export class PositionCache {
 
     // ⚠️ 关键优化：一次性遍历timelineData，构建完整的日期→位置映射表
     for (const periodData of timelineData) {
-      if (timeScale === TimelineScale.HOUR) {
+      if (timeScale === TimelineScale.HOUR || timeScale === TimelineScale.HOUR3) {
         // 小时视图：遍历每天的所有小时
         const hours = (periodData as TimelineDay).hours || []
 

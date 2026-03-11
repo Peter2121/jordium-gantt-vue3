@@ -24,10 +24,12 @@ interface Props {
   enableTaskRowMove?: boolean
   taskListRowClassName?: string | ((row: Task, rowIndex: number) => string)
   taskListRowStyle?: StyleValue | ((row: Task, rowIndex: number) => StyleValue)
+  showHeader?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   taskListColumnRenderMode: 'default',
+  showHeader: true,
 })
 
 const emit = defineEmits<{
@@ -269,7 +271,7 @@ onUnmounted(() => {
 
 <template>
   <div ref="taskListRef" class="task-list">
-    <div class="task-list-header">
+    <div v-if="props.showHeader" class="task-list-header">
       <!-- 声明式模式 -->
       <template v-if="taskListColumnRenderMode === 'declarative'">
         <div

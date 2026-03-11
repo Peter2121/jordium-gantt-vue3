@@ -107,6 +107,7 @@ const messages: Record<Locale, any> = {
     giteeDocs: '查看Gitee文档',
     // 时间刻度按钮
     timeScaleHour: '时',
+    timeScale3Hours: '3时',
     timeScaleDay: '日',
     timeScaleWeek: '周',
     timeScaleMonth: '月',
@@ -408,6 +409,7 @@ const messages: Record<Locale, any> = {
     giteeDocs: 'Gitee Docs',
     // 时间刻度按钮
     timeScaleHour: 'Hour',
+    timeScale3Hours: '3 Hours',
     timeScaleDay: 'Day',
     timeScaleWeek: 'Week',
     timeScaleMonth: 'Month',
@@ -638,6 +640,7 @@ messages['de-DE'] = {
   collapseAll: 'Alle zuklappen',
   taskView: 'Task View',
   timeScaleHour: 'Stunde',
+  timeScale3Hours: '3 Stunden',
   timeScaleDay: 'Tag',
   timeScaleWeek: 'Woche',
   timeScaleMonth: 'Monat',

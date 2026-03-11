@@ -40,6 +40,8 @@ const props = withDefaults(defineProps<Props>(), {
   useDefaultMilestoneDialog: true,
   toolbarConfig: () => ({}),
   showToolbar: true,
+  showTaskListHeader: true,
+  showTimelineHeader: true,
   onTodayLocate: undefined,
   onExportCsv: undefined,
   onExportPdf: undefined,
@@ -116,10 +118,12 @@ const emit = defineEmits([
   'taskbar-resource-change', // 任务跨资源移动事件
   'resource-drag-end', // v1.9.0 资源视图垂直拖拽结束事件
   'timeline-drag-create-end', // 时间轴拖拽创建结束事件
+  'time-scale-change', // 时间刻度变化事件
 ])
 
 // 根元素引用
 const ganttRootRef = ref<HTMLElement>()
+const ganttInstanceId = `gantt-${Math.random().toString(36).slice(2, 11)}-${Date.now().toString(36)}`
 
 const { showMessage } = useMessage()
 const slots = useSlots()
@@ -141,6 +145,7 @@ const currentListConfig = computed(() => {
 provide('gantt-view-mode', currentViewMode)
 provide('gantt-data-source', currentDataSource)
 provide('gantt-list-config', currentListConfig)
+provide('gantt-instance-id', ganttInstanceId)
 
 // v1.9.5 提供showConflicts配置给Timeline组件
 provide('gantt-show-conflicts', computed(() => props.showConflicts))
@@ -456,6 +461,10 @@ interface Props {
   toolbarConfig?: ToolbarConfig
   // 是否显示工具栏
   showToolbar?: boolean
+  // 是否显示左侧列表表头
+  showTaskListHeader?: boolean
+  // 是否显示时间轴表头
+  showTimelineHeader?: boolean
   // 工具栏事件处理器
   onTodayLocate?: () => void
   onExportCsv?: () => boolean | void
@@ -835,7 +844,7 @@ function onMouseDown(e: MouseEvent) {
   const startWidth = leftPanelWidth.value
 
   // 获取task-list-body的宽度
-  const taskListBody = document.querySelector('.task-list-body')
+  const taskListBody = ganttRootRef.value?.querySelector('.task-list-body')
   if (!taskListBody) return
   const taskListBodyRect = taskListBody.getBoundingClientRect()
   taskListBodyWidth.value = taskListBodyRect.width
@@ -848,7 +857,13 @@ function onMouseDown(e: MouseEvent) {
     taskListBodyWidthLimit.value)
 
   // 广播拖拽开始事件，通知其他组件暂停悬停效果
-  window.dispatchEvent(new CustomEvent('splitter-drag-start'))
+  window.dispatchEvent(
+    new CustomEvent('splitter-drag-start', {
+      detail: {
+        ganttInstanceId,
+      },
+    }),
+  )
 
   // 在拖拽期间禁用页面选择和所有指针事件
   document.body.style.userSelect = 'none'
@@ -934,7 +949,13 @@ function onMouseDown(e: MouseEvent) {
     document.removeEventListener('contextmenu', blockAllEvents, { capture: true })
 
     // 广播拖拽结束事件，通知其他组件恢复悬停效果
-    window.dispatchEvent(new CustomEvent('splitter-drag-end'))
+    window.dispatchEvent(
+      new CustomEvent('splitter-drag-end', {
+        detail: {
+          ganttInstanceId,
+        },
+      }),
+    )
 
     // 恢复页面选择、光标和指针事件
     document.body.style.userSelect = ''
@@ -1776,17 +1797,19 @@ function applyBufferAndFillContainer(
   let max: Date
 
   switch (scale) {
-  case TimelineScale.HOUR: {
-    // 小时视图：±1天
+  case TimelineScale.HOUR:
+  case TimelineScale.HOUR3: {
+    // 小时/6小时视图：±1天
     min = new Date(taskMin.getTime() - 24 * 60 * 60 * 1000)
     max = new Date(taskMax.getTime() + 24 * 60 * 60 * 1000)
-    // 确保至少有 minColumns 小时
-    const currentHours = Math.ceil((max.getTime() - min.getTime()) / (1000 * 60 * 60))
-    if (currentHours < minColumns) {
-      const needHours = minColumns - currentHours
-      const expandEach = Math.ceil(needHours / 2)
-      min = new Date(min.getTime() - expandEach * 60 * 60 * 1000)
-      max = new Date(max.getTime() + expandEach * 60 * 60 * 1000)
+    // 确保至少有 minColumns 个时间单元（hour=1h, hour3=3h）
+    const scaleHours = scale === TimelineScale.HOUR3 ? 3 : 1
+    const currentUnits = Math.ceil((max.getTime() - min.getTime()) / (1000 * 60 * 60 * scaleHours))
+    if (currentUnits < minColumns) {
+      const needUnits = minColumns - currentUnits
+      const expandEach = Math.ceil(needUnits / 2)
+      min = new Date(min.getTime() - expandEach * scaleHours * 60 * 60 * 1000)
+      max = new Date(max.getTime() + expandEach * scaleHours * 60 * 60 * 1000)
     }
     break
   }
@@ -2047,6 +2070,7 @@ const csvExportHandler = () => {
 // 时间刻度变化处理函数
 const handleTimeScaleChange = (scale: TimelineScale) => {
   currentTimeScale.value = scale
+  emit('time-scale-change', scale)
   // 通知 Timeline 组件更新时间刻度
   if (timelineRef.value) {
     timelineRef.value.updateTimeScale(scale)
@@ -2071,7 +2095,7 @@ const handleThemeChange = (isDark: boolean) => {
 
 // === 时间维度相关方法 ===
 // 时间刻度顺序定义
-const TIME_SCALE_ORDER: TimelineScale[] = ['hour', 'day', 'week', 'month', 'quarter', 'year']
+const TIME_SCALE_ORDER: TimelineScale[] = ['hour', 'hour3', 'day', 'week', 'month', 'quarter', 'year']
 
 /**
  * 设置时间刻度
@@ -2086,7 +2110,7 @@ const setTimeScale = (scale?: TimelineScale) => {
 
 /**
  * 放大时间刻度（显示更细粒度）
- * year -> quarter -> month -> week -> day -> hour
+ * year -> quarter -> month -> week -> day -> 6h -> hour
  */
 const zoomIn = () => {
   const currentIndex = TIME_SCALE_ORDER.indexOf(currentTimeScale.value)
@@ -2098,7 +2122,7 @@ const zoomIn = () => {
 
 /**
  * 缩小时间刻度（显示更粗粒度）
- * hour -> day -> week -> month -> quarter -> year
+ * hour -> 6h -> day -> week -> month -> quarter -> year
  */
 const zoomOut = () => {
   const currentIndex = TIME_SCALE_ORDER.indexOf(currentTimeScale.value)
@@ -3394,6 +3418,7 @@ defineExpose({
       >
         <TaskList
           :tasks="tasksForTaskList"
+          :show-header="props.showTaskListHeader"
           :use-default-drawer="props.useDefaultDrawer"
           :task-list-config="props.taskListConfig"
           :task-list-column-render-mode="props.taskListColumnRenderMode"
@@ -3448,6 +3473,7 @@ defineExpose({
       <div class="gantt-panel gantt-panel-right" :class="{ 'full-width': !isTaskListVisible }">
         <Timeline
           ref="timelineRef"
+          :show-header="props.showTimelineHeader"
           :tasks="tasksForTimeline"
           :milestones="milestonesForTimeline"
           :start-date="timelineDateRange.min"

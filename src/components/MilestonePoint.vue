@@ -429,7 +429,10 @@ const milestoneStyle = computed(() => {
   }
 
   // 小时视图：使用专门的小时位置计算
-  if (props.currentTimeScale === TimelineScale.HOUR) {
+  if (
+    props.currentTimeScale === TimelineScale.HOUR ||
+    props.currentTimeScale === TimelineScale.HOUR3
+  ) {
     // 小时视图：精确到小时和分钟的定位
     const centerPosition = calculateHourViewMilestonePosition(milestoneDate, props.startDate)
     left = centerPosition - size / 2 // 从中心位置偏移到图标左上角

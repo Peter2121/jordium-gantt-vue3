@@ -1,3 +1,4 @@
+import { inject } from 'vue'
 import type { Ref } from 'vue'
 import type { Task } from '../../../../models/classes/Task'
 import { updateParentTasksData, getAllTasks } from './useTaskParentCalculation'
@@ -18,6 +19,7 @@ export interface TaskListEventHandlersOptions {
 }
 
 export function useTaskListEventHandlers(options: TaskListEventHandlersOptions) {
+  const ganttInstanceId = inject<string>('gantt-instance-id', '')
   const {
     tasks,
     hoveredTaskId,
@@ -38,13 +40,18 @@ export function useTaskListEventHandlers(options: TaskListEventHandlersOptions) 
     hoveredTaskId.value = taskId
     window.dispatchEvent(
       new CustomEvent('task-list-hover', {
-        detail: taskId,
+        detail: {
+          ganttInstanceId,
+          taskId,
+        },
       }),
     )
   }
 
   const handleTimelineHover = (event: CustomEvent) => {
-    hoveredTaskId.value = event.detail
+    const detail = event.detail || {}
+    if (detail.ganttInstanceId !== ganttInstanceId) return
+    hoveredTaskId.value = detail.taskId ?? null
   }
 
   // ==================== 双击事件处理 ====================
@@ -56,7 +63,10 @@ export function useTaskListEventHandlers(options: TaskListEventHandlersOptions) 
 
     window.dispatchEvent(
       new CustomEvent('task-row-double-click', {
-        detail: task,
+        detail: {
+          ganttInstanceId,
+          task,
+        },
       }),
     )
   }
@@ -154,13 +164,19 @@ export function useTaskListEventHandlers(options: TaskListEventHandlersOptions) 
 
     window.dispatchEvent(
       new CustomEvent('task-list-vertical-scroll', {
-        detail: { scrollTop },
+        detail: {
+          ganttInstanceId,
+          scrollTop,
+        },
       }),
     )
   }
 
   const handleTimelineVerticalScroll = (event: CustomEvent) => {
-    const { scrollTop } = event.detail
+    const detail = event.detail || {}
+    if (detail.ganttInstanceId !== ganttInstanceId) return
+    const scrollTop = detail.scrollTop
+    if (typeof scrollTop !== 'number') return
     const taskListBodyElement = taskListBodyRef.value
 
     taskListScrollTop.value = scrollTop
@@ -190,11 +206,15 @@ export function useTaskListEventHandlers(options: TaskListEventHandlersOptions) 
 
   // ==================== Splitter 拖拽事件 ====================
 
-  const handleSplitterDragStart = () => {
+  const handleSplitterDragStart = (event: CustomEvent) => {
+    const detail = event.detail || {}
+    if (detail.ganttInstanceId !== ganttInstanceId) return
     isSplitterDragging.value = true
   }
 
-  const handleSplitterDragEnd = () => {
+  const handleSplitterDragEnd = (event: CustomEvent) => {
+    const detail = event.detail || {}
+    if (detail.ganttInstanceId !== ganttInstanceId) return
     isSplitterDragging.value = false
     // 拖拽结束后，手动更新一次容器宽度，触发列宽重新计算
     updateContainerWidth()

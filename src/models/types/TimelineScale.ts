@@ -1,11 +1,12 @@
 // 时间轴比例类型定义
 
 // 使用字符串字面量类型代替enum，兼容erasableSyntaxOnly
-export type TimelineScale = 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year'
+export type TimelineScale = 'hour' | 'hour3' | 'day' | 'week' | 'month' | 'quarter' | 'year'
 
 // 导出常量值以便于使用
 export const TimelineScale = {
   HOUR: 'hour' as TimelineScale, // 小时视图 - 每列显示一小时
+  HOUR3: 'hour3' as TimelineScale, // 3小时视图 - 每列显示三小时
   DAY: 'day' as TimelineScale, // 日视图 - 每列显示一天
   WEEK: 'week' as TimelineScale, // 周视图 - 每列显示一周
   MONTH: 'month' as TimelineScale, // 月视图 - 每列显示一个月
@@ -27,6 +28,12 @@ export interface TimelineScaleConfig {
 export const SCALE_CONFIGS = {
   hour: {
     scale: TimelineScale.HOUR,
+    cellWidth: 40,
+    headerLevels: 2,
+    formatters: { primary: 'yyyy年MM月dd日', secondary: 'HH:mm' },
+  },
+  hour3: {
+    scale: TimelineScale.HOUR3,
     cellWidth: 40,
     headerLevels: 2,
     formatters: { primary: 'yyyy年MM月dd日', secondary: 'HH:mm' },

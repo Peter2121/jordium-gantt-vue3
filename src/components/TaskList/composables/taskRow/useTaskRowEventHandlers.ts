@@ -1,4 +1,4 @@
-import { onMounted, onUnmounted, type Ref } from 'vue'
+import { inject, onMounted, onUnmounted, type Ref } from 'vue'
 import type { Task } from '../../../../models/classes/Task'
 
 /**
@@ -19,6 +19,7 @@ export function useTaskRowEventHandlers(
   dragStart?: (task: Task, element: HTMLElement, event: MouseEvent) => void,
   dragOver?: (task: Task, element: HTMLElement, event: MouseEvent) => void,
 ) {
+  const ganttInstanceId = inject<string>('gantt-instance-id', '')
   // 处理折叠/展开
   const handleToggle = () => {
     if (emit) {
@@ -67,11 +68,15 @@ export function useTaskRowEventHandlers(
   }
 
   // 拖拽状态管理
-  const handleSplitterDragStart = () => {
+  const handleSplitterDragStart = (event: Event) => {
+    const detail = (event as CustomEvent).detail || {}
+    if (detail.ganttInstanceId !== ganttInstanceId) return
     isSplitterDragging.value = true
   }
 
-  const handleSplitterDragEnd = () => {
+  const handleSplitterDragEnd = (event: Event) => {
+    const detail = (event as CustomEvent).detail || {}
+    if (detail.ganttInstanceId !== ganttInstanceId) return
     isSplitterDragging.value = false
   }
 

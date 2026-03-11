@@ -62,6 +62,8 @@ interface Props {
   createByDragRequireShift?: boolean
   // 拖拽创建的最小像素宽度，小于此值不触发创建
   createByDragMinWidthPx?: number
+  // 是否显示时间轴头部
+  showHeader?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -91,6 +93,7 @@ const props = withDefaults(defineProps<Props>(), {
   enableCreateByDrag: false,
   createByDragRequireShift: false,
   createByDragMinWidthPx: 6,
+  showHeader: true,
 })
 
 // 定义emits
@@ -143,6 +146,7 @@ const formatHourHeaderDate = (date: Date): string => {
 
 // v1.9.9 使用useViewMode统一管理视图模式状态
 const { viewMode, dataSource } = useViewMode()
+const ganttInstanceId = inject<string>('gantt-instance-id', '')
 
 // v1.9.0 从 GanttChart 注入资源冲突信息（由 GanttChart 计算并响应 updateTaskTrigger）
 const resourceConflicts = inject<ComputedRef<Map<string, Set<number>>>>('resourceConflicts', computed(() => new Map()))
@@ -255,6 +259,10 @@ const timelineConfig = ref<TimelineConfig>({
 
 // 当前时间刻度
 const currentTimeScale = ref<TimelineScale>(TimelineScale.DAY)
+const isSubDayScale = (scale: TimelineScale): boolean =>
+  scale === TimelineScale.HOUR || scale === TimelineScale.HOUR3
+const getSubDayCellHours = (scale: TimelineScale): number => (scale === TimelineScale.HOUR3 ? 3 : 1)
+const SUB_DAY_CELL_WIDTH = 40
 
 // 响应外部props变化，动态更新timelineConfig
 watch([timelineStartDate, timelineEndDate], ([newStart, newEnd]) => {
@@ -286,9 +294,9 @@ const timelinePanelElement = ref<HTMLElement | null>(null)
 
 // 根据时间刻度计算每日宽度
 const dayWidth = computed(() => {
-  if (currentTimeScale.value === TimelineScale.HOUR) {
-    // 小时视图：每小时40px，一天24小时，每天960px
-    return 960 // 24 * 40
+  if (isSubDayScale(currentTimeScale.value)) {
+    // 小时/6小时视图：每个单元40px
+    return (24 / getSubDayCellHours(currentTimeScale.value)) * SUB_DAY_CELL_WIDTH
   } else if (currentTimeScale.value === TimelineScale.WEEK) {
     // 周视图：每周60px，分7天，每天约8.57px
     return 60 / 7
@@ -1385,12 +1393,12 @@ const timelineScrollLeft = ref(0)
 const timelineContainerWidth = ref(0)
 
 // 半圆气泡控制状态
-const hideBubbles = ref(true) // 初始时隐藏半圆，等待初始滚动完成
+const hideBubbles = ref(props.autoCenterToday) // 仅在自动定位今日时初始隐藏半圆
 const isInitialScrolling = ref(true) // 跟踪初始滚动状态
 let hideBubblesTimeout: number | null = null // 半圆显示恢复定时器
 
 // 虚拟滚动相关状态
-const HOUR_WIDTH = 40 // 每小时40px
+const HOUR_WIDTH = SUB_DAY_CELL_WIDTH // 小时/6小时视图每个时间单元40px
 const VIRTUAL_BUFFER = 10 // 减少缓冲区以提升滑动性能
 
 // v1.9.5 P2-3优化 - 智能缓存数据结构
@@ -1409,7 +1417,7 @@ const isInitialLoad = ref(true)
 
 // 计算小时视图的可视区域范围
 const visibleHourRange = computed(() => {
-  if (currentTimeScale.value !== TimelineScale.HOUR) {
+  if (!isSubDayScale(currentTimeScale.value)) {
     return { startHour: 0, endHour: 0 }
   }
 
@@ -1419,19 +1427,24 @@ const visibleHourRange = computed(() => {
   // 首次加载时，使用更大的初始渲染范围
   if (isInitialLoad.value && scrollLeft === 0) {
     // 初始加载且在起始位置：显示开头的一周
+    const initialUnits = getSubDayCellHours(currentTimeScale.value) === 3 ? 56 : 168
     return {
       startHour: 0,
-      endHour: 168, // 一周 (7*24=168小时)
+      endHour: initialUnits,
     }
   } else if (isInitialLoad.value) {
     // 初始加载但不在起始位置：以今天为中心的一周范围
     const today = new Date()
     const timelineStart = timelineConfig.value.startDate
-    const todayHours = Math.floor((today.getTime() - timelineStart.getTime()) / (1000 * 60 * 60))
+    const scaleHours = getSubDayCellHours(currentTimeScale.value)
+    const todayHours = Math.floor(
+      (today.getTime() - timelineStart.getTime()) / (1000 * 60 * 60 * scaleHours),
+    )
 
+    const initialUnits = scaleHours === 6 ? 28 : 168
     return {
-      startHour: Math.max(0, todayHours - 168), // 前一周 (7*24=168小时)
-      endHour: todayHours + 168, // 后一周
+      startHour: Math.max(0, todayHours - initialUnits),
+      endHour: todayHours + initialUnits,
     }
   }
 
@@ -1507,10 +1520,10 @@ const getDateByScrollPosition = (scrollPosition: number): Date => {
     return timelineStart
   }
 
-  if (scale === TimelineScale.HOUR) {
-    // 小时视图：每小时40px
-    const hours = scrollPosition / 40
-    return new Date(timelineStart.getTime() + hours * 60 * 60 * 1000)
+  if (isSubDayScale(scale)) {
+    const scaleHours = getSubDayCellHours(scale)
+    const units = scrollPosition / SUB_DAY_CELL_WIDTH
+    return new Date(timelineStart.getTime() + units * scaleHours * 60 * 60 * 1000)
   } else if (scale === TimelineScale.DAY) {
     // 日视图：每天30px
     const days = scrollPosition / 30
@@ -1787,13 +1800,13 @@ const rebuildResourceTaskQueues = () => {
   }
 
   const { startDate: visibleStartDate, endDate: visibleEndDate } = visibleTimeRange.value
-  const skipHorizontalFilter = currentTimeScale.value === TimelineScale.HOUR
+  const skipHorizontalFilter = isSubDayScale(currentTimeScale.value)
 
   // v1.9.7 Bug修复：月度/季度/年度视图禁用像素级精确过滤，直接使用visibleTimeRange
   // 原因：月度视图中每月天数不同（28-31天），使用固定30天计算会导致跨月时间范围误差
   // 例如：2月只有28天，但计算时用30天，会导致部分TaskBar被错误过滤
   const scale = currentTimeScale.value
-  const usePixelLevelFilter = scale === TimelineScale.HOUR || scale === TimelineScale.DAY || scale === TimelineScale.WEEK
+  const usePixelLevelFilter = isSubDayScale(scale) || scale === TimelineScale.DAY || scale === TimelineScale.WEEK
 
   let viewportStartTime: number
   let viewportEndTime: number
@@ -1806,8 +1819,8 @@ const rebuildResourceTaskQueues = () => {
 
     // 根据时间刻度计算每单位的像素宽度
     let pixelPerMs = 0
-    if (scale === TimelineScale.HOUR) {
-      pixelPerMs = 40 / (60 * 60 * 1000) // 40px per hour
+    if (isSubDayScale(scale)) {
+      pixelPerMs = SUB_DAY_CELL_WIDTH / (getSubDayCellHours(scale) * 60 * 60 * 1000)
     } else if (scale === TimelineScale.DAY) {
       pixelPerMs = 30 / (24 * 60 * 60 * 1000) // 30px per day
     } else if (scale === TimelineScale.WEEK) {
@@ -1963,7 +1976,7 @@ const visibleResourcesWithFilteredTasks = computed(() => {
   }
 
   const { startDate: visibleStartDate, endDate: visibleEndDate } = visibleTimeRange.value
-  const skipHorizontalFilter = currentTimeScale.value === TimelineScale.HOUR
+  const skipHorizontalFilter = isSubDayScale(currentTimeScale.value)
 
   // 性能监控统计
   let totalOriginalTasks = 0
@@ -2053,8 +2066,8 @@ const getCachedTimelineData = (): unknown => {
 
   // 缓存未命中或已过期，重新生成数据
   let data: unknown
-  if (scale === TimelineScale.HOUR) {
-    data = generateHourTimelineData()
+  if (isSubDayScale(scale)) {
+    data = generateHourTimelineData(getSubDayCellHours(scale))
   } else if (scale === TimelineScale.WEEK) {
     data = generateWeekTimelineData()
   } else if (scale === TimelineScale.MONTH) {
@@ -2100,7 +2113,7 @@ const getCachedTimelineData = (): unknown => {
 const optimizedTimelineData = computed(() => {
   const cachedData = getCachedTimelineData() as any
   // 只在小时视图中应用虚拟滚动
-  if (currentTimeScale.value === TimelineScale.HOUR && Array.isArray(cachedData)) {
+  if (isSubDayScale(currentTimeScale.value) && Array.isArray(cachedData)) {
     const { startHour, endHour } = visibleHourRange.value
 
     // 优化：合并 map + filter 为单次遍历
@@ -2115,7 +2128,8 @@ const optimizedTimelineData = computed(() => {
       const currentDay = new Date(day.year, day.month - 1, day.day)
       currentDay.setHours(0, 0, 0, 0)
       const daysDiff = Math.floor((currentDay.getTime() - dayStartTime) / msPerDay)
-      const totalHourOffset = daysDiff * 24
+      const unitsPerDay = 24 / getSubDayCellHours(currentTimeScale.value)
+      const totalHourOffset = daysDiff * unitsPerDay
 
       // 计算当前天应该显示的小时范围
       const dayStartHour = Math.max(0, startHour - totalHourOffset)
@@ -2152,12 +2166,12 @@ const totalTimelineWidth = computed(() => {
   const scale = currentTimeScale.value
 
   // 小时视图
-  if (scale === TimelineScale.HOUR) {
+  if (isSubDayScale(scale)) {
     let totalHours = 0
     for (const day of cachedData as any[]) {
       totalHours += day.hours.length
     }
-    return totalHours * HOUR_WIDTH
+    return totalHours * SUB_DAY_CELL_WIDTH
   }
 
   // 季度视图
@@ -2390,7 +2404,10 @@ const handleTaskRowHover = (taskId: number | string | null) => {
   // 发送事件通知TaskList组件
   window.dispatchEvent(
     new CustomEvent('timeline-task-hover', {
-      detail: taskId,
+      detail: {
+        ganttInstanceId,
+        taskId,
+      },
     }),
   )
 }
@@ -2428,12 +2445,17 @@ const handleTaskListHover = (event: CustomEvent) => {
   if (isDragging.value) {
     return
   }
-  hoveredTaskId.value = event.detail
+  const detail = event.detail || {}
+  if (detail.ganttInstanceId !== ganttInstanceId) return
+  hoveredTaskId.value = detail.taskId ?? null
 }
 
 // 处理TaskList的双击事件 (与TaskBar双击效果一致)
 const handleTaskListDoubleClick = (event: CustomEvent) => {
-  const task = event.detail
+  const detail = event.detail || {}
+  if (detail.ganttInstanceId !== ganttInstanceId) return
+  const task = detail.task
+  if (!task) return
   // 调用相同的双击处理逻辑
   handleTaskBarDoubleClick(task)
 }
@@ -2552,8 +2574,8 @@ const isWorkingHour = (hour: number, dayOfWeek: number) => {
   return false
 }
 
-// 生成小时视图时间轴数据
-const generateHourTimelineData = () => {
+// 生成子日尺度（小时/6小时）时间轴数据
+const generateHourTimelineData = (hourStep = 1) => {
   const days: unknown[] = []
   const currentDate = new Date(timelineConfig.value.startDate)
 
@@ -2562,17 +2584,21 @@ const generateHourTimelineData = () => {
     const month = currentDate.getMonth() + 1
     const day = currentDate.getDate()
 
-    // 生成该天的24小时数据
+    // 生成该天的小时段数据
     const hours = []
     const dayOfWeek = currentDate.getDay() // 获取星期几
-    for (let hour = 0; hour < 24; hour++) {
+    for (let hour = 0; hour < 24; hour += hourStep) {
       const hourDate = new Date(year, month - 1, day, hour)
+      const shortLabel = hourStep === 1 ? String(hour).padStart(2, '0') : String(hour)
       hours.push({
         hour,
         label: `${String(hour).padStart(2, '0')}:00`,
-        shortLabel: String(hour).padStart(2, '0'), // 简化显示格式，只显示小时数
+        shortLabel,
         date: hourDate,
-        isToday: isToday(hourDate) && hour === new Date().getHours(),
+        isToday:
+          isToday(hourDate) &&
+          new Date().getHours() >= hour &&
+          new Date().getHours() < Math.min(24, hour + hourStep),
         isWorkingHour: isWorkingHour(hour, dayOfWeek), // 判断是否为工作时间
         isWeekend: dayOfWeek === 0 || dayOfWeek === 6, // 是否为周末
       })
@@ -2725,7 +2751,7 @@ const updateTimeScale = (scale: TimelineScale) => {
   }
 
   // 如果是小时视图或日视图，更新时间线配置
-  if (scale === TimelineScale.HOUR) {
+  if (isSubDayScale(scale)) {
     const hourRange = getHourTimelineRange()
     // 设置防护标志，避免递归更新
     isUpdatingTimelineConfig = true
@@ -2934,7 +2960,7 @@ const scrollToTodayCenter = (retry = 0) => {
   // 计算今天在时间线中的像素位置（根据当前时间刻度）
   let todayPosition: number
 
-  if (currentTimeScale.value === TimelineScale.HOUR) {
+  if (isSubDayScale(currentTimeScale.value)) {
     // 小时视图：精确到小时的定位
     const currentHour = today.getHours()
     const currentMinute = today.getMinutes()
@@ -2942,13 +2968,11 @@ const scrollToTodayCenter = (retry = 0) => {
     // 基础天数偏移（到今日0点的位置）
     const baseDayPosition = daysDiff * dayWidth.value
 
-    // 小时偏移：每小时40px
-    const hourOffset = currentHour * 40
+    const cellMinutes = getSubDayCellHours(currentTimeScale.value) * 60
+    const totalMinutes = currentHour * 60 + currentMinute
+    const subDayOffset = (totalMinutes / cellMinutes) * SUB_DAY_CELL_WIDTH
 
-    // 分钟偏移：在当前小时内的精确位置
-    const minuteOffset = (currentMinute / 60) * 40
-
-    todayPosition = baseDayPosition + hourOffset + minuteOffset
+    todayPosition = baseDayPosition + subDayOffset
   } else if (currentTimeScale.value === TimelineScale.QUARTER) {
     // 季度视图：使用与MilestonePoint相同的计算逻辑
     const targetYear = todayNormalized.getFullYear()
@@ -3107,7 +3131,7 @@ const scrollToTodayCenter = (retry = 0) => {
   setTimeout(() => {
     isInitialScrolling.value = false
     // 在小时视图中，滚动完成后标记初始化完成
-    if (currentTimeScale.value === TimelineScale.HOUR) {
+    if (isSubDayScale(currentTimeScale.value)) {
       isInitialLoad.value = false
     }
     setTimeout(() => {
@@ -3287,7 +3311,7 @@ const scrollToToday = () => {
 
   // 添加今日高亮效果
   setTimeout(() => {
-    const todayColumns = document.querySelectorAll('.day-column.today')
+    const todayColumns = timelineContainer.value?.querySelectorAll('.day-column.today') ?? []
     for (const column of todayColumns) {
       column.classList.add('today-highlight')
       // 2秒后移除高亮效果
@@ -3347,7 +3371,7 @@ const scrollToDate = (date: Date | string) => {
   // 计算目标日期在时间线中的像素位置（根据当前时间刻度）
   let datePosition: number
 
-  if (currentTimeScale.value === TimelineScale.HOUR) {
+  if (isSubDayScale(currentTimeScale.value)) {
     // 小时视图：精确到小时的定位
     const targetHour = targetDate.getHours()
     const targetMinute = targetDate.getMinutes()
@@ -3355,13 +3379,11 @@ const scrollToDate = (date: Date | string) => {
     // 基础天数偏移（到目标日0点的位置）
     const baseDayPosition = daysDiff * dayWidth.value
 
-    // 小时偏移：每小时40px
-    const hourOffset = targetHour * 40
+    const cellMinutes = getSubDayCellHours(currentTimeScale.value) * 60
+    const totalMinutes = targetHour * 60 + targetMinute
+    const subDayOffset = (totalMinutes / cellMinutes) * SUB_DAY_CELL_WIDTH
 
-    // 分钟偏移：在当前小时内的精确位置
-    const minuteOffset = (targetMinute / 60) * 40
-
-    datePosition = baseDayPosition + hourOffset + minuteOffset
+    datePosition = baseDayPosition + subDayOffset
   } else if (currentTimeScale.value === TimelineScale.QUARTER) {
     // 季度视图：计算季度偏移
     const targetYear = targetNormalized.getFullYear()
@@ -3706,14 +3728,14 @@ onMounted(() => {
   // 设置ResizeObserver监听timeline-body的尺寸变化
   nextTick(() => {
     // 初始化并缓存 DOM 元素引用
-    const timelineBody = document.querySelector('.timeline-body') as HTMLElement
-    const timelineContainer = document.querySelector('.timeline') as HTMLElement
-    const timelinePanel = document.querySelector('.gantt-panel-right') as HTMLElement
+    const timelineContainerEl = timelineContainer.value as HTMLElement | null
+    const timelineBody = timelineContainerEl?.querySelector('.timeline-body') as HTMLElement | null
+    const timelinePanel = timelineContainerEl?.closest('.gantt-panel-right') as HTMLElement | null
 
     // 缓存到 ref 中
-    timelineBodyElement.value = timelineBody
-    timelineContainerElement.value = timelineContainer
-    timelinePanelElement.value = timelinePanel
+    timelineBodyElement.value = timelineBody ?? null
+    timelineContainerElement.value = timelineContainerEl ?? null
+    timelinePanelElement.value = timelinePanel ?? null
 
     if (timelineBody) {
       timelineBodyHeight.value = timelineBody.clientHeight
@@ -3733,9 +3755,9 @@ onMounted(() => {
     }
 
     // 初始化滚动位置信息，使用正确的滚动容器
-    if (timelineContainer) {
-      timelineScrollLeft.value = timelineContainer.scrollLeft
-      timelineContainerWidth.value = timelineContainer.clientWidth
+    if (timelineContainerEl) {
+      timelineScrollLeft.value = timelineContainerEl.scrollLeft
+      timelineContainerWidth.value = timelineContainerEl.clientWidth
 
       // 为容器宽度变化创建独立的ResizeObserver
       const containerResizeObserver = new ResizeObserver(entries => {
@@ -3767,7 +3789,7 @@ onMounted(() => {
           }
         }
       })
-      containerResizeObserver.observe(timelineContainer)
+      containerResizeObserver.observe(timelineContainerEl)
 
       // 将容器ResizeObserver也存储起来，用于清理
       if (!resizeObserver) {
@@ -3781,6 +3803,9 @@ onMounted(() => {
   setTimeout(() => {
     if (props.autoCenterToday) {
       scrollToTodayCenter()
+    } else {
+      // 未启用自动定位时，确保半圆可见
+      hideBubbles.value = false
     }
     updateSvgSize()
   }, 200)
@@ -3790,7 +3815,10 @@ onMounted(() => {
 
 // 处理TaskList垂直滚动同步
 const handleTaskListVerticalScroll = (event: CustomEvent) => {
-  const { scrollTop } = event.detail
+  const detail = event.detail || {}
+  if (detail.ganttInstanceId !== ganttInstanceId) return
+  const scrollTop = detail.scrollTop
+  if (typeof scrollTop !== 'number') return
 
   // 立即更新纵向滚动位置（用于虚拟滚动计算）
   timelineBodyScrollTop.value = scrollTop
@@ -3825,7 +3853,10 @@ const handleTimelineBodyScroll = (event: Event) => {
   if (scrollTop >= 0) {
     window.dispatchEvent(
       new CustomEvent('timeline-vertical-scroll', {
-        detail: { scrollTop },
+        detail: {
+          ganttInstanceId,
+          scrollTop,
+        },
       }),
     )
   }
@@ -4021,7 +4052,7 @@ const formatCreateDateForScale = (value: Date): string => {
   const hour = String(value.getHours()).padStart(2, '0')
   const minute = String(value.getMinutes()).padStart(2, '0')
 
-  if (currentTimeScale.value === TimelineScale.HOUR) {
+  if (isSubDayScale(currentTimeScale.value)) {
     return `${year}-${month}-${day} ${hour}:${minute}`
   }
   return `${year}-${month}-${day}`
@@ -4211,7 +4242,9 @@ const handleMouseMove = (event: MouseEvent) => {
       timelineBodyElement.value.scrollTop = newScrollTop
 
       // 直接同步 TaskList 的滚动位置，避免通过事件触发
-      const taskListBody = document.querySelector('.task-list-body') as HTMLElement
+      const taskListBody = timelineContainer.value
+        ?.closest('.gantt-body')
+        ?.querySelector('.gantt-panel-left .task-list-body') as HTMLElement | null
       if (taskListBody) {
         taskListBody.scrollTop = newScrollTop
       }
@@ -4290,7 +4323,7 @@ const handleTimelineScroll = (event: Event) => {
   if (isDragging.value) return
 
   // 小时视图简化处理
-  if (currentTimeScale.value === TimelineScale.HOUR) {
+  if (isSubDayScale(currentTimeScale.value)) {
     isScrolling.value = true
 
     if (scrollTimeout) clearTimeout(scrollTimeout)
@@ -4686,7 +4719,7 @@ const updateTimelineRange = () => {
 
   let newRange: { startDate: Date; endDate: Date } | null = null
 
-  if (currentTimeScale.value === TimelineScale.HOUR) {
+  if (isSubDayScale(currentTimeScale.value)) {
     newRange = getHourTimelineRange()
   } else if (currentTimeScale.value === TimelineScale.DAY) {
     newRange = getDayTimelineRange()
@@ -4802,9 +4835,9 @@ watch(
 const handleMilestoneClickLocate = (event: CustomEvent) => {
   const { scrollLeft, smooth } = event.detail
 
-  // 获取Timeline容器 - 尝试两个可能的滚动容器
-  const timelineMain = document.querySelector('.timeline') as HTMLElement
-  const timelineBody = document.querySelector('.timeline-body') as HTMLElement
+  // 使用当前组件实例的容器，避免多实例时命中错误的Timeline。
+  const timelineMain = timelineContainerElement.value
+  const timelineBody = timelineBodyElement.value
 
   // 选择有滚动能力的容器
   let scrollContainer: HTMLElement | null = null
@@ -5075,7 +5108,7 @@ const handleAddSuccessor = (task: Task) => {
     @scroll="handleTimelineScroll"
   >
     <!-- Timeline Header -->
-    <div class="timeline-header">
+    <div v-if="props.showHeader" class="timeline-header">
       <!-- 年度视图的header：第一行=年份，第二行=上半年/下半年 -->
       <template
         v-if="
@@ -5171,7 +5204,7 @@ const handleAddSuccessor = (task: Task) => {
       </template>
 
       <!-- 小时视图的header：第一行=yyyy/MM/dd，第二行=00:00-23:00 -->
-      <template v-else-if="currentTimeScale === TimelineScale.HOUR">
+      <template v-else-if="isSubDayScale(currentTimeScale)">
         <!-- 设置header容器总宽度以确保完整的滚动范围 -->
         <div class="hour-header-container" :style="{ width: `${totalTimelineWidth}px` }">
           <!-- 第一行：日期 (yyyy/MM/dd) -->
@@ -5182,8 +5215,8 @@ const handleAddSuccessor = (task: Task) => {
               class="timeline-day-item"
               :style="{
                 position: 'absolute',
-                width: `${day.hours.length * 40}px`,
-                left: `${(day.hourOffset || 0) * 40}px`,
+                width: `${day.hours.length * SUB_DAY_CELL_WIDTH}px`,
+                left: `${(day.hourOffset || 0) * SUB_DAY_CELL_WIDTH}px`,
               }"
             >
               <div class="date-label">{{ day.dateLabel }}</div>
@@ -5201,13 +5234,15 @@ const handleAddSuccessor = (task: Task) => {
                 :key="`hour-${day.year}-${day.month}-${day.day}-${hour.hour}`"
                 class="timeline-hour-item"
                 :class="{
+                  even: ((day.hourOffset || 0) + index) % 2 === 0,
+                  odd: ((day.hourOffset || 0) + index) % 2 !== 0,
                   today: hour.isToday,
                   'non-working-hour': !hour.isWorkingHour,
                 }"
                 :style="{
                   position: 'absolute',
-                  width: '40px',
-                  left: `${(day.hourOffset + index) * 40}px`,
+                  width: `${SUB_DAY_CELL_WIDTH}px`,
+                  left: `${(day.hourOffset + index) * SUB_DAY_CELL_WIDTH}px`,
                 }"
               >
                 <div class="hour-label">{{ hour.shortLabel }}</div>
@@ -5344,7 +5379,7 @@ const handleAddSuccessor = (task: Task) => {
         <!-- 背景列 -->
         <div class="day-columns" :style="{ height: `${contentHeight}px` }">
           <!-- 小时视图背景列 -->
-          <template v-if="currentTimeScale === TimelineScale.HOUR">
+          <template v-if="isSubDayScale(currentTimeScale)">
             <!-- 设置容器总宽度以确保完整的滚动范围 -->
             <div
               class="hour-columns-container"
@@ -5363,6 +5398,8 @@ const handleAddSuccessor = (task: Task) => {
                   :key="`hour-col-${day.year}-${day.month}-${day.day}-${hour.hour}`"
                   class="hour-column"
                   :class="{
+                    even: ((day.hourOffset || 0) + index) % 2 === 0,
+                    odd: ((day.hourOffset || 0) + index) % 2 !== 0,
                     today: hour.isToday,
                     weekend: hour.isWeekend,
                     'working-hour': hour.isWorkingHour,
@@ -5370,9 +5407,9 @@ const handleAddSuccessor = (task: Task) => {
                   }"
                   :style="{
                     position: 'absolute',
-                    width: '40px',
+                    width: `${SUB_DAY_CELL_WIDTH}px`,
                     height: `${contentHeight}px`,
-                    left: `${(day.hourOffset + index) * 40}px`,
+                    left: `${(day.hourOffset + index) * SUB_DAY_CELL_WIDTH}px`,
                   }"
                 >
                   <!-- 15分钟刻度分割线 -->
@@ -5432,7 +5469,7 @@ const handleAddSuccessor = (task: Task) => {
           <!-- 其他视图背景列 -->
           <template
             v-else-if="
-              currentTimeScale !== TimelineScale.HOUR &&
+              !isSubDayScale(currentTimeScale) &&
               currentTimeScale !== TimelineScale.YEAR &&
               currentTimeScale !== TimelineScale.QUARTER
             "
@@ -5607,7 +5644,7 @@ const handleAddSuccessor = (task: Task) => {
                 :container-width="timelineContainerWidth"
                 :hide-bubbles="hideBubbles"
                 :timeline-data="
-                  currentTimeScale === TimelineScale.HOUR ? optimizedTimelineData : timelineData
+                  isSubDayScale(currentTimeScale) ? optimizedTimelineData : timelineData
                 "
                 :current-time-scale="currentTimeScale"
                 :task-bar-config="props.taskBarConfig"
@@ -5697,7 +5734,7 @@ const handleAddSuccessor = (task: Task) => {
                   :container-width="timelineContainerWidth"
                   :hide-bubbles="hideBubbles"
                   :timeline-data="
-                    currentTimeScale === TimelineScale.HOUR ? optimizedTimelineData : timelineData
+                    isSubDayScale(currentTimeScale) ? optimizedTimelineData : timelineData
                   "
                   :current-time-scale="currentTimeScale"
                   :task-bar-config="props.taskBarConfig"

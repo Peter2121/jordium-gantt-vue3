@@ -413,7 +413,10 @@ function calculatePosition(startDate: Date, endDate: Date): { left: number; widt
   let width = 0
 
   // 小时视图：使用分钟精度计算
-  if (props.currentTimeScale === TimelineScale.HOUR) {
+  if (
+    props.currentTimeScale === TimelineScale.HOUR ||
+    props.currentTimeScale === TimelineScale.HOUR3
+  ) {
     // 计算时间线开始日期的00:00:00作为全局基准
     const timelineStartOfDay = new Date(props.startDate)
     timelineStartOfDay.setHours(0, 0, 0, 0)
