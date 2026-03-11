@@ -3578,9 +3578,6 @@ defineExpose({
   width: 100%;
   height: 100%;
   background: #f5f7fa;
-  box-shadow:
-    0 6px 32px 0 rgba(0, 0, 0, 0.1),
-    0 1.5px 6px 0 rgba(0, 0, 0, 0.08);
   border-radius: 12px;
   overflow: hidden;
 }
@@ -3902,7 +3899,6 @@ defineExpose({
 /* 全屏模式下的工具栏 */
 .gantt-fullscreen .gantt-toolbar {
   border-radius: 0 !important;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1) !important;
 }
 
 /* 暗色主题下的全屏模式 */
@@ -3911,7 +3907,6 @@ defineExpose({
 }
 
 :global(.gantt-root[data-theme='dark']) .gantt-fullscreen .gantt-toolbar {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
 }
 
 /* 拖拽分割器时的保护样式 */

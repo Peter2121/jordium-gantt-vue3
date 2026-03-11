@@ -6,9 +6,10 @@ import type { Task } from '../models/classes/Task'
  */
 
 /**
- * 检测两个任务是否存在时间交集
- * 注意：endDate包含当天，所以 task1(2025-01-28~2025-01-29) 和 task2(2025-01-29~2025-01-30)
- * 在 2025-01-29 这天是重叠的，应该换行显示
+ * 检测两个任务是否存在真实时间交集
+ * 使用半开区间 [start, end)：
+ * - task1.end === task2.start 不算重叠
+ * - 只有真实相交的时间段才算重叠
  */
 export function hasTimeOverlap(task1: Task, task2: Task): boolean {
   // 获取任务的开始和结束日期（时间戳）
@@ -22,15 +23,8 @@ export function hasTimeOverlap(task1: Task, task2: Task): boolean {
     return false
   }
 
-  // endDate包含当天，需要+1天来判断交集
-  // 例如：task1结束于2025-01-29，task2开始于2025-01-29
-  // end1Plus = 2025-01-30，start2 = 2025-01-29
-  // 判断：end1Plus(2025-01-30) > start2(2025-01-29) 为true，所以它们重叠
-  const end1Plus = end1 + 24 * 60 * 60 * 1000
-  const end2Plus = end2 + 24 * 60 * 60 * 1000
-
-  // 判断是否有交集
-  return end1Plus > start2 && end2Plus > start1
+  // 使用半开区间 [start, end) 判断是否有真实交集
+  return start1 < end2 && start2 < end1
 }
 
 /**

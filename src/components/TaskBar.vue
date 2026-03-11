@@ -3544,6 +3544,7 @@ const handleAnchorDragEnd = (anchorEvent: { taskId: number; type: 'predecessor' 
       'short-task-bar': isShortTaskBar,
       'overflow-effect': needsOverflowEffect,
       'parent-taskbar-style': isParentTaskbarStyle,
+      'planner-selected': (task as any).isPlannerSelected,
       highlighted: isHighlighted,
       'primary-highlight': isPrimaryHighlight,
       dimmed: isDimmed,
@@ -4217,6 +4218,17 @@ class="hover-tooltip-arrow" :style="{
   font-weight: bold !important;
 }
 
+.task-bar.planner-selected {
+  box-shadow:
+    0 0 0 1px var(--sl-color-success-500),
+    0 0 18px color-mix(in srgb, var(--sl-color-success-500) 65%, transparent) !important;
+}
+
+.task-bar.planner-selected .task-bar-content,
+.task-bar.planner-selected .parent-label-inner {
+  font-weight: 700 !important;
+}
+
 .task-bar.parent-task {
   position: relative;
   border-radius: 0 !important; /* 不要圆角 */
@@ -4263,6 +4275,17 @@ class="hover-tooltip-arrow" :style="{
 
 .task-bar.parent-task.parent-taskbar-style.primary-highlight {
   transform: scale(1.08) !important;
+}
+
+.task-bar.parent-task.planner-selected {
+  box-shadow:
+    0 0 0 1px var(--sl-color-success-500),
+    0 0 18px color-mix(in srgb, var(--sl-color-success-500) 65%, transparent) !important;
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--sl-color-success-500) 70%, transparent)) !important;
+}
+
+.task-bar.parent-task.parent-taskbar-style.planner-selected {
+  border-color: var(--sl-color-success-500) !important;
 }
 
 /* 左侧向下箭头 */

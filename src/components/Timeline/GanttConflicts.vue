@@ -92,7 +92,16 @@ const canvasStyle = computed(() => ({
 watch(() => props.tasks, () => {
   if (isDraggingTaskBar.value) {
     needsRecalculation.value = true
+    return
   }
+
+  // 外erhalb eines aktiven Drag-Vorgangs müssen externe Task-Updates
+  // das Konflikt-Overlay sofort neu berechnen.
+  texturePatterns.value = { light: null, medium: null, severe: null }
+  coordsCache.clear()
+  nextTick(() => {
+    recalculateConflicts()
+  })
 }, { deep: true })
 
 // v1.9.9 监听renderLimit变化，TaskBar渐进式渲染时重新计算冲突

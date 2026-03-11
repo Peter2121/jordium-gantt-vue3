@@ -246,9 +246,6 @@ const totalOverloadPercent = computed(() => {
   if (!currentTask.startDate || !currentTask.endDate) return 0
   const currentPercent = props.resourceCapacity || 100
 
-  // v1.9.9 修复：endDate 包含当天，需要 +1 天来判断交集
-  const DAY_MS = 24 * 60 * 60 * 1000
-
   // 计算所有冲突任务在重叠时间段内的最大总占比
   let maxTotalPercent = currentPercent
 
@@ -260,31 +257,23 @@ const totalOverloadPercent = computed(() => {
     if (!task1.startDate || !task1.endDate) return
     const start1 = new Date(task1.startDate).getTime()
     const end1 = new Date(task1.endDate).getTime()
-    const end1Plus = end1 + DAY_MS // endDate 包含当天，需要 +1 天
-
     allTasks.forEach((task2, j) => {
       if (i >= j || !task2.startDate || !task2.endDate) return
       const start2 = new Date(task2.startDate).getTime()
       const end2 = new Date(task2.endDate).getTime()
-      const end2Plus = end2 + DAY_MS // endDate 包含当天，需要 +1 天
-
-      // 检查是否有时间重叠（使用 +1 天后的 endDate）
-      // 例如：任务A endDate=12-24, 任务B startDate=12-24，应判断为重叠
-      if (start1 < end2Plus && start2 < end1Plus) {
+      // 使用半开区间 [start, end)； direkt angrenzende Termine zählen nicht als Überlappung
+      if (start1 < end2 && start2 < end1) {
         // 计算该重叠区间的所有任务总占比
         const overlapStart = Math.max(start1, start2)
         const overlapEnd = Math.min(end1, end2)
-        const overlapEndPlus = overlapEnd + DAY_MS
 
         let intervalTotal = 0
         allTasks.forEach(task => {
           if (!task.startDate || !task.endDate) return
           const tStart = new Date(task.startDate).getTime()
           const tEnd = new Date(task.endDate).getTime()
-          const tEndPlus = tEnd + DAY_MS
-
-          // 检查任务是否在该重叠区间内（使用 +1 天后的 endDate）
-          if (tStart < overlapEndPlus && tEndPlus > overlapStart) {
+          // 使用 halb-offenes Intervall [start, end)
+          if (tStart < overlapEnd && tEnd > overlapStart) {
             // v1.9.10 注释：如果任务没有 resources 字段，默认使用 100%
             // 这确保了资源视图中未明确指定占比的任务被正确计入冲突检测
             let taskPercent = 100

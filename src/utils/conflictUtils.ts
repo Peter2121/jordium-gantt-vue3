@@ -104,19 +104,21 @@ function detectConflictsBruteForce(
       if (!intersection) continue
 
       // 收集该时间段内的所有任务
-      // 🔧 修复：使用本地日期格式，避免toISOString的UTC时区问题
-      const formatLocalDate = (date: Date): string => {
+      // 使用本地日期时间格式，避免toISOString的UTC时区问题和时间精度丢失
+      const formatLocalDateTime = (date: Date): string => {
         const year = date.getFullYear()
         const month = String(date.getMonth() + 1).padStart(2, '0')
         const day = String(date.getDate()).padStart(2, '0')
-        return `${year}-${month}-${day}`
+        const hour = String(date.getHours()).padStart(2, '0')
+        const minute = String(date.getMinutes()).padStart(2, '0')
+        return `${year}-${month}-${day} ${hour}:${minute}`
       }
 
       const overlappingTasks = tasks.filter((task) => {
         const taskIntersection = getTimeIntersection(
           {
-            startDate: formatLocalDate(intersection.start),
-            endDate: formatLocalDate(intersection.end),
+            startDate: formatLocalDateTime(intersection.start),
+            endDate: formatLocalDateTime(intersection.end),
           } as Task,
           task,
         )
@@ -163,8 +165,7 @@ function detectConflictsBruteForce(
           const overlapStart = Math.max(taskStart.getTime(), intersection.start.getTime())
           const overlapEnd = Math.min(taskEnd.getTime(), intersection.end.getTime())
           timePoints.add(overlapStart)
-          // endDate是包含当天的，所以需要+1天作为结束边界
-          timePoints.add(overlapEnd + 24 * 60 * 60 * 1000)
+          timePoints.add(overlapEnd)
         }
       }
 
@@ -184,9 +185,8 @@ function detectConflictsBruteForce(
           const taskEnd = parseDate(task.endDate)
           if (!taskStart || !taskEnd) continue
 
-          // 检查任务是否在这个时间段内活跃（endDate是包含的，所以需要+1天）
-          const taskEndInclusive = taskEnd.getTime() + 24 * 60 * 60 * 1000
-          if (taskStart.getTime() <= segmentStart && taskEndInclusive > segmentStart) {
+          // 使用半开区间 [start, end) 判断任务是否在该时间段内活跃
+          if (taskStart.getTime() <= segmentStart && taskEnd.getTime() > segmentStart) {
             const resource = task.resources?.find((r) => String(r.id) === String(resourceId))
             const capacity =
               !task.resources || task.resources.length === 0 ? 100 : (resource?.capacity || 0)
@@ -212,9 +212,6 @@ function detectConflictsBruteForce(
           realEnd = overloadedIntervals[k].end
         }
       }
-      // realEnd是边界点（下一天的开始），需要-1天得到实际的endDate
-      realEnd = realEnd - 24 * 60 * 60 * 1000
-
       // 创建区间标识符用于去重（避免多个任务对产生相同的冲突区间）
       const intervalKey = `${realStart}-${realEnd}`
 
@@ -331,16 +328,12 @@ export function getTimeIntersection(
     return null
   }
 
-  // endDate包含当天，需要+1天来判断交集
-  const end1Plus = new Date(end1.getTime() + 24 * 60 * 60 * 1000)
-  const end2Plus = new Date(end2.getTime() + 24 * 60 * 60 * 1000)
-
-  // 判断是否有交集：task1.start < task2.end+1 && task2.start < task1.end+1
-  if (start1 >= end2Plus || start2 >= end1Plus) {
+  // 使用半开区间 [start, end) 判断是否有真实交集
+  if (start1 >= end2 || start2 >= end1) {
     return null
   }
 
-  // 计算交集（返回的end是包含当天的，不需要+1）
+  // 计算真实交集
   const intersectionStart = new Date(Math.max(start1.getTime(), start2.getTime()))
   const intersectionEnd = new Date(Math.min(end1.getTime(), end2.getTime()))
 
@@ -511,8 +504,9 @@ class IntervalTree {
   ): void {
     if (!node) return
 
-    // 当前节点是否与查询区间重叠
-    if (node.start <= end && node.end >= start) {
+    // 使用半开区间 [start, end)：
+    // Zwei Tasks dürfen zeitlich direkt aneinanderstoßen, ohne als Konflikt zu gelten.
+    if (node.start < end && node.end > start) {
       result.push(node.task)
     }
 
@@ -583,15 +577,15 @@ function detectConflictsWithIntervalTree(
 
     // 收集所有任务的时间边界点
     const timePoints = new Set<number>()
-    timePoints.add(start.getTime()) // 当前任务的开始
-    timePoints.add(end.getTime() + 24 * 60 * 60 * 1000) // 当前任务的结束+1天
+    timePoints.add(start.getTime())
+    timePoints.add(end.getTime())
 
     for (const t of tasksWithResource) {
       const tStart = parseDate(t.startDate)
       const tEnd = parseDate(t.endDate)
       if (tStart && tEnd) {
         timePoints.add(tStart.getTime())
-        timePoints.add(tEnd.getTime() + 24 * 60 * 60 * 1000)
+        timePoints.add(tEnd.getTime())
       }
     }
 
@@ -611,9 +605,8 @@ function detectConflictsWithIntervalTree(
         const tEnd = parseDate(t.endDate)
         if (!tStart || !tEnd) continue
 
-        // 检查任务是否在这个时间段内活跃
-        const tEndInclusive = tEnd.getTime() + 24 * 60 * 60 * 1000
-        if (tStart.getTime() <= segmentStart && tEndInclusive > segmentStart) {
+        // 使用半开区间 [start, end) 判断任务是否在该时间段内活跃
+        if (tStart.getTime() <= segmentStart && tEnd.getTime() > segmentStart) {
           const resource = t.resources?.find((r) => String(r.id) === String(resourceId))
           const capacity = !t.resources || t.resources.length === 0 ? 100 : (resource?.capacity || 0)
           segmentPercent += capacity
@@ -637,9 +630,6 @@ function detectConflictsWithIntervalTree(
         realEnd = overloadedIntervals[k].end
       }
     }
-    // realEnd是边界点（下一天的开始），需要-1天得到实际的endDate
-    realEnd = realEnd - 24 * 60 * 60 * 1000
-
     // 去重
     const intervalKey = `${realStart}-${realEnd}`
     if (processedIntervals.has(intervalKey)) continue
