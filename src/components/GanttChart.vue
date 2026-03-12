@@ -72,12 +72,14 @@ const props = withDefaults(defineProps<Props>(), {
   enableTaskBarTooltip: true,
   showConflicts: true,
   showTaskbarTab: true,
+  allowTaskListResize: true,
   autoCenterToday: true,
   timelineStartDate: undefined,
   timelineEndDate: undefined,
   enableCreateByDrag: false,
   createByDragRequireShift: false,
   createByDragMinWidthPx: 6,
+  createByDragAllowed: undefined,
   fullscreen: false,
   expandAll: true,
   locale: 'zh-CN',
@@ -176,7 +178,7 @@ const resourceTaskLayouts = computed(() => {
 
   if (currentViewMode.value === 'resource') {
     const resources = currentDataSource.value as Resource[]
-    const baseRowHeight = 51
+    const baseRowHeight = 32
 
     // 依赖 updateTaskTrigger 以便在任务更新时重新计算布局
     if (updateTaskTrigger.value >= 0) {
@@ -276,7 +278,7 @@ const resourceRowPositions = computed(() => {
       const resourceId = String(resource.id)
       positions.set(resourceId, cumulativeTop)
       const layout = resourceTaskLayouts.value.get(resourceId)
-      const resourceHeight = layout?.totalHeight || 51
+      const resourceHeight = layout?.totalHeight || 32
       cumulativeTop += resourceHeight
     })
   }
@@ -543,6 +545,8 @@ interface Props {
   // v1.9.5 是否显示TaskBar上的资源Tab标签（默认为 true）
   // 当设置为 false 时，资源视图下TaskBar不显示资源分配Tab标签
   showTaskbarTab?: boolean
+  // 是否允许通过splitter调整左侧列表宽度
+  allowTaskListResize?: boolean
   // 是否自动将时间线滚动到今天（默认为 true）
   autoCenterToday?: boolean
   // Optionaler, fester Zeitbereich für die Timeline
@@ -554,6 +558,8 @@ interface Props {
   createByDragRequireShift?: boolean
   // 拖拽创建最小像素宽度
   createByDragMinWidthPx?: number
+  // Optionaler Selektor, ob eine Zeile Drag-Create erlaubt
+  createByDragAllowed?: (task: Task) => boolean
   // 自定义任务状态背景色（优先级高于默认配色，低于Task.barColor）
   // 待处理任务背景色：任务未开始且未逾期时使用
   pendingTaskBackgroundColor?: string
@@ -698,6 +704,18 @@ const leftPanelWidth = ref(getTaskListDefaultWidth())
 // 提供 TaskList 宽度给子组件（用于 tooltip 定位）
 provide('gantt-task-list-width', leftPanelWidth)
 
+const notifyTaskListStateChange = () => {
+  window.dispatchEvent(
+    new CustomEvent('gantt-task-list-state-change', {
+      detail: {
+        ganttInstanceId,
+        width: leftPanelWidth.value,
+        visible: isTaskListVisible.value,
+      },
+    }),
+  )
+}
+
 // 简化的限制检查函数：直接基于面板实际宽度判断
 const checkWidthLimits = (proposedLeftWidth: number): number => {
   if (proposedLeftWidth < ganttPanelLeftMinWidth.value) {
@@ -826,6 +844,10 @@ const dragging = ref(false)
 provide('isSplitBarDragging', dragging)
 
 function onMouseDown(e: MouseEvent) {
+  if (props.allowTaskListResize === false) {
+    return
+  }
+
   // 检查事件目标是否是task-list-toggle按钮或其子元素
   const target = e.target as HTMLElement
   if (target.closest('.task-list-toggle')) {
@@ -1020,6 +1042,32 @@ const toggleTaskList = () => {
   }, 400)
 }
 
+const setTaskListWidth = (width: number) => {
+  if (!Number.isFinite(width)) return
+  const adjustedWidth = checkWidthLimits(width)
+  if (adjustedWidth === leftPanelWidth.value) return
+  leftPanelWidth.value = adjustedWidth
+  nextTick(() => {
+    window.dispatchEvent(
+      new CustomEvent('timeline-container-resized', {
+        detail: { source: 'task-list-width-api' },
+      }),
+    )
+  })
+}
+
+const setTaskListVisible = (visible: boolean) => {
+  if (isTaskListVisible.value === visible) return
+  isTaskListVisible.value = visible
+  nextTick(() => {
+    window.dispatchEvent(
+      new CustomEvent('timeline-container-resized', {
+        detail: { source: 'task-list-visible-api' },
+      }),
+    )
+  })
+}
+
 // 监听Timeline的TaskList切换事件
 const handleToggleTaskList = (event: CustomEvent) => {
   isTaskListVisible.value = event.detail
@@ -1128,6 +1176,10 @@ const handleTaskCollapseChange = (task: Task) => {
   // 向外发出折叠状态变化事件
   emit('task-collapse-change', task)
 }
+
+watch([leftPanelWidth, isTaskListVisible], () => {
+  notifyTaskListStateChange()
+})
 
 // 全部展开任务
 const handleExpandAll = () => {
@@ -3356,6 +3408,13 @@ defineExpose({
   toggleExpandAll: toggleExpandAllTasks,
   isExpandAll: getIsExpandAll,
 
+  // TaskList 侧栏相关
+  setTaskListWidth,
+  getTaskListWidth: () => leftPanelWidth.value,
+  setTaskListVisible,
+  isTaskListVisible: () => isTaskListVisible.value,
+  getInstanceId: () => ganttInstanceId,
+
   // 今日定位相关
   scrollToToday,
   scrollToTask,
@@ -3444,6 +3503,10 @@ defineExpose({
         </TaskList>
       </div>
       <div class="gantt-splitter" @mousedown="onMouseDown">
+        <div
+          v-if="props.allowTaskListResize === false"
+          class="gantt-splitter-hit-block"
+        ></div>
         <!-- TaskList切换按钮 - 贴合splitter右侧 -->
         <div
           class="task-list-toggle"
@@ -3495,6 +3558,7 @@ defineExpose({
           :enable-create-by-drag="props.enableCreateByDrag"
           :create-by-drag-require-shift="props.createByDragRequireShift"
           :create-by-drag-min-width-px="props.createByDragMinWidthPx"
+          :create-by-drag-allowed="props.createByDragAllowed"
           @timeline-scale-changed="handleTimelineScaleChanged"
           @click-task="handleTimelineClickTask"
           @edit-task="handleTimelineEditTask"
@@ -3677,8 +3741,19 @@ defineExpose({
   touch-action: none; /* 禁用触摸事件 */
 }
 
+.gantt-root:not(.splitter-dragging) .gantt-splitter:has(.gantt-splitter-hit-block) {
+  cursor: default;
+}
+
 .gantt-splitter:hover {
   background: var(--gantt-border-dark, #c0c4cc);
+}
+
+.gantt-splitter-hit-block {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  cursor: default;
 }
 
 .placeholder {

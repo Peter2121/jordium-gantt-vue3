@@ -821,12 +821,12 @@ const taskBarStyle = computed(() => {
     // 换行布局：根据子行索引和每行高度计算垂直位置
     const subRow = props.taskSubRow
     const rowHeights = props.rowHeights
-    const currentRowHeight = rowHeights[subRow] || 51
+    const currentRowHeight = rowHeights[subRow] || 32
 
     // 计算当前子行距离顶部的偏移量（累加前面所有行的高度）
     let cumulativeOffset = 0
     for (let i = 0; i < subRow; i++) {
-      cumulativeOffset += rowHeights[i] || 51
+      cumulativeOffset += rowHeights[i] || 32
     }
 
     // v1.9.1 在当前子行内居中对齐（因为TaskBar固定41px高度）
@@ -1404,7 +1404,7 @@ const handleMouseMove = (e: MouseEvent) => {
       const currentResourceId = String(props.currentResourceId)
       const currentRowTop = resourceRowPositions.value.get(currentResourceId) || 0
       const currentRowLayout = resourceTaskLayouts.value.get(currentResourceId)
-      const currentRowHeight = currentRowLayout?.totalHeight || 51
+      const currentRowHeight = currentRowLayout?.totalHeight || 32
       const currentRowBottom = currentRowTop + currentRowHeight
 
       // 判断鼠标是否超出当前资源行的边界
@@ -2009,7 +2009,7 @@ const handleMouseUp = () => {
       const currentResourceId = String(props.currentResourceId)
       const currentRowTop = resourceRowPositions.value.get(currentResourceId) || 0
       const currentRowLayout = resourceTaskLayouts.value.get(currentResourceId)
-      const currentRowHeight = currentRowLayout?.totalHeight || 51
+      const currentRowHeight = currentRowLayout?.totalHeight || 32
       const currentRowBottom = currentRowTop + currentRowHeight
 
       // 判断鼠标是否超出当前资源行的边界
@@ -4330,6 +4330,11 @@ class="hover-tooltip-arrow" :style="{
   align-items: center;
   justify-content: center;
   height: 100%;
+}
+
+.task-bar.parent-task[style*="--row-height: 31px"] .parent-label-inner,
+.task-bar.parent-task[style*="--row-height: 32px"] .parent-label-inner {
+  font-size: 9px;
 }
 
 .task-bar.parent-task.parent-taskbar-style .parent-label-inner {

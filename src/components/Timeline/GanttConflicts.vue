@@ -289,11 +289,11 @@ function recalculateConflictsIncremental(changedTaskId: string | number) {
         const maxRow = Math.max(...rowNumbers)
         top = 0
         for (let i = 0; i < minRow; i++) {
-          top += props.rowHeights[i] || 51
+          top += props.rowHeights[i] || 32
         }
         height = 0
         for (let i = minRow; i <= maxRow; i++) {
-          height += props.rowHeights[i] || 51
+          height += props.rowHeights[i] || 32
         }
         height = Math.max(1, height - 10)
       }
@@ -385,13 +385,13 @@ function recalculateConflicts() {
         // Canvas本身已有topOffset，所以这里直接累加行高即可
         top = 0
         for (let i = 0; i < minRow; i++) {
-          top += props.rowHeights[i] || 51
+          top += props.rowHeights[i] || 32
         }
 
         // 计算height：从minRow到maxRow所有行的高度之和
         height = 0
         for (let i = minRow; i <= maxRow; i++) {
-          height += props.rowHeights[i] || 51
+          height += props.rowHeights[i] || 32
         }
         // 减去底部边距（约2.5px），让冲突区域不超出TaskBar底部边界
         height = Math.max(1, height - 10)

@@ -110,7 +110,10 @@ const rowHeight = computed(() => {
   if (isResourceRow.value) {
     const resourceId = String(props.task.id) // 转换为string
     const layout = resourceTaskLayouts.value.get(resourceId)
-    return layout?.totalHeight || 56 // v1.9.1 默认56px（51 + 5px底部padding）
+    return layout?.totalHeight || 32
+  }
+  if ((props.task as any)?.kind === 'group') {
+    return 32
   }
   return 51 // task视图下使用固定高度
 })
@@ -327,6 +330,13 @@ const assigneeDisplayData = computed(() => {
     hasMultiple: displayAvatars.length > 1,
   }
 })
+
+function getResourceTypeIconName(entryType?: string | null) {
+  if (entryType === 'person') return 'person-fill'
+  if (entryType === 'vehicle') return 'car-front-fill'
+  if (entryType === 'object') return 'box-seam'
+  return ''
+}
 </script>
 
 <template>
@@ -432,6 +442,11 @@ const assigneeDisplayData = computed(() => {
                 stroke-linecap="round"
               />
             </svg>
+            <sl-icon
+              v-if="getResourceTypeIconName((props.task as any).entryType)"
+              class="resource-type-icon"
+              :name="getResourceTypeIconName((props.task as any).entryType)"
+            ></sl-icon>
             <div v-if="(props.task as any).avatar" class="resource-avatar">
               <img :src="(props.task as any).avatar" :alt="(props.task as any).name" />
             </div>
@@ -686,6 +701,7 @@ const assigneeDisplayData = computed(() => {
 /* v1.9.0 资源类型左边框颜色 */
 .task-type-resource {
   border-left: 3px solid var(--gantt-success, #67c23a);
+  min-height: 32px;
 }
 
 /* 任务类型悬停时保持左边框，无需加粗 */
@@ -920,16 +936,23 @@ const assigneeDisplayData = computed(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  height: 100%;
   font-weight: 500;
   color: var(--gantt-text-primary);
 }
 
 /* v1.9.0 资源超载警示图标 */
 .resource-warning-icon {
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
   animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.resource-type-icon {
+  font-size: 0.9rem;
+  color: var(--gantt-text-secondary);
+  flex-shrink: 0;
 }
 
 @keyframes pulse {
@@ -942,8 +965,8 @@ const assigneeDisplayData = computed(() => {
 }
 
 .resource-avatar {
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   overflow: hidden;
   flex-shrink: 0;

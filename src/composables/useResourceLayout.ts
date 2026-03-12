@@ -24,7 +24,7 @@ export interface ResourceLayout {
 const layoutCache = new Map<string, ResourceLayout>()
 
 // 默认行高常量
-const DEFAULT_ROW_HEIGHT = 51
+const DEFAULT_ROW_HEIGHT = 32
 const VERTICAL_BUFFER = 2
 
 /**

@@ -62,6 +62,8 @@ interface Props {
   createByDragRequireShift?: boolean
   // 拖拽创建的最小像素宽度，小于此值不触发创建
   createByDragMinWidthPx?: number
+  // Optionaler Selektor, ob eine Zeile Drag-Create überhaupt erlaubt
+  createByDragAllowed?: (task: Task) => boolean
   // 是否显示时间轴头部
   showHeader?: boolean
 }
@@ -93,6 +95,7 @@ const props = withDefaults(defineProps<Props>(), {
   enableCreateByDrag: false,
   createByDragRequireShift: false,
   createByDragMinWidthPx: 6,
+  createByDragAllowed: undefined,
   showHeader: true,
 })
 
@@ -207,7 +210,8 @@ const isSplitBarDragging = inject<Ref<boolean>>('isSplitBarDragging', ref(false)
 const showConflicts = inject<ComputedRef<boolean>>('gantt-show-conflicts', computed(() => true))
 
 // 纵向虚拟滚动相关状态（需要在useResourceLayout之前定义）
-const ROW_HEIGHT = 51 // 每行高度51px (50px + 1px border)
+const ROW_HEIGHT = 51 // 默认行高51px (50px + 1px border)
+const GROUP_ROW_HEIGHT = 32 // Gruppen kompakter darstellen
 const VERTICAL_BUFFER = 5 // 纵向缓冲区行数
 const timelineBodyScrollTop = ref(0) // 纵向滚动位置
 const timelineBodyHeight = ref(0) // 容器高度状态管理
@@ -216,6 +220,23 @@ const timelineBodyHeight = ref(0) // 容器高度状态管理
 // GanttChart已经计算并provide了resourceTaskLayouts和resourceRowPositions
 const resourceTaskLayouts = inject<ComputedRef<Map<string | number, any>>>('resourceTaskLayouts', computed(() => new Map()))
 const resourceRowPositions = inject<ComputedRef<Map<string | number, number>>>('resourceRowPositions', computed(() => new Map()))
+
+const getTaskViewRowHeight = (task: Task): number => {
+  if (task?.kind === 'group') return GROUP_ROW_HEIGHT
+  return ROW_HEIGHT
+}
+
+const taskViewRowPositions = computed(() => {
+  const positions: number[] = []
+  let cumulativeTop = 0
+
+  for (const task of tasks.value) {
+    positions.push(cumulativeTop)
+    cumulativeTop += getTaskViewRowHeight(task)
+  }
+
+  return positions
+})
 
 // 获取以今天为中心的时间线范围（缓存结果，避免每次计算创建新对象）
 const cachedTodayCenteredRange = (() => {
@@ -1660,9 +1681,28 @@ const visibleTaskRange = computed(() => {
       endIndex: Math.min(resources.length, endIndex),
     }
   } else {
-    // 任务视图：使用固定行高计算
-    const startIndex = Math.floor(scrollTop / ROW_HEIGHT) - VERTICAL_BUFFER
-    const endIndex = Math.ceil((scrollTop + containerHeight) / ROW_HEIGHT) + VERTICAL_BUFFER
+    let startIndex = 0
+    let endIndex = tasks.value.length
+
+    for (let i = 0; i < tasks.value.length; i++) {
+      const rowTop = taskViewRowPositions.value[i] || 0
+      const rowHeight = getTaskViewRowHeight(tasks.value[i])
+      const rowBottom = rowTop + rowHeight
+
+      if (rowBottom >= scrollTop - ROW_HEIGHT * VERTICAL_BUFFER) {
+        startIndex = i
+        break
+      }
+    }
+
+    const scrollBottom = scrollTop + containerHeight
+    for (let i = startIndex; i < tasks.value.length; i++) {
+      const rowTop = taskViewRowPositions.value[i] || 0
+      if (rowTop > scrollBottom + ROW_HEIGHT * VERTICAL_BUFFER) {
+        endIndex = i
+        break
+      }
+    }
 
     return {
       startIndex: Math.max(0, startIndex),
@@ -2418,16 +2458,16 @@ const contentHeight = computed(() => {
     resources.forEach(resource => {
       // v1.9.9 从 resourceTaskLayouts 直接获取布局
       const layout = resourceTaskLayouts.value.get(resource.id)
-      totalHeight += layout?.totalHeight || 51
+      totalHeight += layout?.totalHeight || 32
     })
 
     return Math.max(totalHeight, minHeight, timelineBodyHeight.value)
   }
 
-  // 任务视图：每个任务行高度51px (50px + 1px border)
-  const rowHeight = 51
-  const taskCount = tasks.value.length
-  const minHeightFromTasks = taskCount * rowHeight
+  const minHeightFromTasks = tasks.value.reduce(
+    (sum, task) => sum + getTaskViewRowHeight(task),
+    0,
+  )
 
   // 返回任务高度、最小高度和容器高度中的最大值
   return Math.max(minHeightFromTasks, minHeight, timelineBodyHeight.value)
@@ -3718,6 +3758,9 @@ onMounted(() => {
 
   // 监听资源视图垂直拖拽事件
   window.addEventListener('resource-taskbar-drop', handleResourceTaskBarDrop as EventListener)
+  window.addEventListener('mousemove', handleWindowMouseMove)
+  window.addEventListener('keydown', handleKeyDown)
+  window.addEventListener('keyup', handleKeyUp)
 
   // 设置ResizeObserver监听timeline-body的尺寸变化
   nextTick(() => {
@@ -3898,8 +3941,21 @@ let scrollRafId: number | null = null // 时间轴拖拽滚动的 RAF ID
 const isCreateDragging = ref(false)
 const createDragRowIndex = ref(-1)
 const createDragRowTop = ref(0)
+const createDragRowHeight = ref(ROW_HEIGHT)
 const createDragStartX = ref(0)
 const createDragCurrentX = ref(0)
+const createDragTooltipX = ref(0)
+const createDragTooltipY = ref(0)
+const createDragTooltipText = ref('')
+const createDragShiftPressed = ref(false)
+const shiftHoverTooltipVisible = ref(false)
+const shiftHoverTooltipX = ref(0)
+const shiftHoverTooltipY = ref(0)
+const shiftHoverTooltipText = ref('')
+const isShiftPressed = ref(false)
+const isPointerInsideTimeline = ref(false)
+const lastPointerClientX = ref(0)
+const lastPointerClientY = ref(0)
 const createDragOverlayStyle = computed(() => {
   const left = Math.min(createDragStartX.value, createDragCurrentX.value)
   const width = Math.max(2, Math.abs(createDragCurrentX.value - createDragStartX.value))
@@ -3907,9 +3963,19 @@ const createDragOverlayStyle = computed(() => {
     left: `${left}px`,
     width: `${width}px`,
     top: `${createDragRowTop.value + 2}px`,
-    height: `${Math.max(22, ROW_HEIGHT - 4)}px`,
+    height: `${Math.max(22, createDragRowHeight.value - 4)}px`,
   }
 })
+
+const createDragTooltipStyle = computed(() => ({
+  left: `${createDragTooltipX.value + 14}px`,
+  top: `${createDragTooltipY.value + 14}px`,
+}))
+
+const shiftHoverTooltipStyle = computed(() => ({
+  left: `${shiftHoverTooltipX.value + 14}px`,
+  top: `${shiftHoverTooltipY.value + 14}px`,
+}))
 
 // 边界滚动相关状态
 const isAutoScrolling = ref(false)
@@ -4000,7 +4066,7 @@ const handleResourceTaskBarDrop = (event: Event) => {
     const rowTop = resourceRowPositions.value.get(resourceId) || 0
     // v1.9.9 从resoureTaskLayouts直接获取布局
     const layout = resourceTaskLayouts.value.get(resourceId)
-    const rowHeight = layout?.totalHeight || 51
+    const rowHeight = layout?.totalHeight || 32
     const rowCenter = rowTop + rowHeight / 2
     const distance = Math.abs(relativeY - rowCenter)
 
@@ -4052,6 +4118,64 @@ const formatCreateDateForScale = (value: Date): string => {
   return `${year}-${month}-${day}`
 }
 
+const snapDateToFiveMinutes = (value: Date): Date => {
+  const snapped = new Date(value)
+  snapped.setSeconds(0, 0)
+  const minutes = snapped.getMinutes()
+  snapped.setMinutes(Math.round(minutes / 5) * 5)
+  return snapped
+}
+
+const getSnappedDateByScrollPosition = (scrollPosition: number): Date => {
+  return snapDateToFiveMinutes(getDateByScrollPosition(scrollPosition))
+}
+
+const formatCreateTooltipDate = (value: Date): string => {
+  return new Intl.DateTimeFormat('de-DE', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(value)
+}
+
+const updateShiftHoverTooltip = (clientX: number, clientY: number) => {
+  if (viewMode.value !== 'task' || !timelineContainer.value || !isShiftPressed.value) {
+    shiftHoverTooltipVisible.value = false
+    return
+  }
+
+  const containerRect = timelineContainer.value.getBoundingClientRect()
+  const isInside =
+    clientX >= containerRect.left &&
+    clientX <= containerRect.right &&
+    clientY >= containerRect.top &&
+    clientY <= containerRect.bottom
+
+  if (!isInside) {
+    shiftHoverTooltipVisible.value = false
+    return
+  }
+
+  const x = clientX - containerRect.left + timelineContainer.value.scrollLeft
+  shiftHoverTooltipX.value = clientX
+  shiftHoverTooltipY.value = clientY
+  shiftHoverTooltipText.value = formatCreateTooltipDate(getSnappedDateByScrollPosition(x))
+  shiftHoverTooltipVisible.value = true
+}
+
+const findTaskRowIndexByY = (relativeY: number): number => {
+  for (let i = 0; i < tasks.value.length; i++) {
+    const rowTop = taskViewRowPositions.value[i] || 0
+    const rowHeight = getTaskViewRowHeight(tasks.value[i])
+    if (relativeY >= rowTop && relativeY < rowTop + rowHeight) {
+      return i
+    }
+  }
+  return -1
+}
+
 const startCreateDrag = (event: MouseEvent): boolean => {
   if (!props.enableCreateByDrag || viewMode.value !== 'task') return false
   if (props.createByDragRequireShift && !event.shiftKey) return false
@@ -4059,20 +4183,26 @@ const startCreateDrag = (event: MouseEvent): boolean => {
 
   const bodyRect = timelineBodyElement.value.getBoundingClientRect()
   const relativeY = event.clientY - bodyRect.top + timelineBodyElement.value.scrollTop
-  const rowIndex = Math.floor(relativeY / ROW_HEIGHT)
+  const rowIndex = findTaskRowIndexByY(relativeY)
   if (rowIndex < 0 || rowIndex >= tasks.value.length) return false
 
   const targetTask = tasks.value[rowIndex]
   if (!targetTask) return false
+  if (props.createByDragAllowed && !props.createByDragAllowed(targetTask)) return false
 
   const containerRect = timelineContainer.value.getBoundingClientRect()
   const x = event.clientX - containerRect.left + timelineContainer.value.scrollLeft
 
   isCreateDragging.value = true
   createDragRowIndex.value = rowIndex
-  createDragRowTop.value = rowIndex * ROW_HEIGHT
+  createDragRowTop.value = taskViewRowPositions.value[rowIndex] || 0
+  createDragRowHeight.value = getTaskViewRowHeight(targetTask)
   createDragStartX.value = x
   createDragCurrentX.value = x
+  createDragTooltipX.value = event.clientX
+  createDragTooltipY.value = event.clientY
+  createDragTooltipText.value = formatCreateTooltipDate(getSnappedDateByScrollPosition(x))
+  createDragShiftPressed.value = event.shiftKey
 
   event.preventDefault()
   document.addEventListener('mousemove', handleMouseMove)
@@ -4090,8 +4220,8 @@ const finishCreateDrag = () => {
   const width = Math.abs(createDragCurrentX.value - createDragStartX.value)
 
   if (targetTask && width >= props.createByDragMinWidthPx) {
-    const startDateObj = getDateByScrollPosition(minX)
-    const endDateObj = getDateByScrollPosition(maxX)
+    const startDateObj = getSnappedDateByScrollPosition(minX)
+    const endDateObj = getSnappedDateByScrollPosition(maxX)
     const startMs = startDateObj.getTime()
     const endMs = endDateObj.getTime()
 
@@ -4110,8 +4240,13 @@ const finishCreateDrag = () => {
   isCreateDragging.value = false
   createDragRowIndex.value = -1
   createDragRowTop.value = 0
+  createDragRowHeight.value = ROW_HEIGHT
   createDragStartX.value = 0
   createDragCurrentX.value = 0
+  createDragTooltipX.value = 0
+  createDragTooltipY.value = 0
+  createDragTooltipText.value = ''
+  createDragShiftPressed.value = false
 }
 
 // 鼠标按下开始拖拽（在时间轴表头和body区域）
@@ -4205,6 +4340,12 @@ const handleMouseMove = (event: MouseEvent) => {
     event.preventDefault()
     const containerRect = timelineContainer.value.getBoundingClientRect()
     createDragCurrentX.value = event.clientX - containerRect.left + timelineContainer.value.scrollLeft
+    createDragTooltipX.value = event.clientX
+    createDragTooltipY.value = event.clientY
+    createDragTooltipText.value = formatCreateTooltipDate(
+      getSnappedDateByScrollPosition(createDragCurrentX.value),
+    )
+    createDragShiftPressed.value = event.shiftKey
     return
   }
 
@@ -4246,6 +4387,62 @@ const handleMouseMove = (event: MouseEvent) => {
 
     scrollRafId = null
   })
+}
+
+const handleTimelineMouseMove = (event: MouseEvent) => {
+  isPointerInsideTimeline.value = true
+  lastPointerClientX.value = event.clientX
+  lastPointerClientY.value = event.clientY
+  if (isCreateDragging.value) return
+  updateShiftHoverTooltip(event.clientX, event.clientY)
+}
+
+const handleWindowMouseMove = (event: MouseEvent) => {
+  lastPointerClientX.value = event.clientX
+  lastPointerClientY.value = event.clientY
+
+  if (isCreateDragging.value) return
+  if (!timelineContainer.value) {
+    shiftHoverTooltipVisible.value = false
+    return
+  }
+
+  const rect = timelineContainer.value.getBoundingClientRect()
+  isPointerInsideTimeline.value =
+    event.clientX >= rect.left &&
+    event.clientX <= rect.right &&
+    event.clientY >= rect.top &&
+    event.clientY <= rect.bottom
+
+  if (!isShiftPressed.value) {
+    shiftHoverTooltipVisible.value = false
+    return
+  }
+
+  updateShiftHoverTooltip(event.clientX, event.clientY)
+}
+
+const handleTimelineMouseLeave = () => {
+  isPointerInsideTimeline.value = false
+  if (!isCreateDragging.value) {
+    shiftHoverTooltipVisible.value = false
+  }
+}
+
+const handleKeyDown = (event: KeyboardEvent) => {
+  if (event.key !== 'Shift') return
+  isShiftPressed.value = true
+  if (isPointerInsideTimeline.value && !isCreateDragging.value) {
+    updateShiftHoverTooltip(lastPointerClientX.value, lastPointerClientY.value)
+  }
+}
+
+const handleKeyUp = (event: KeyboardEvent) => {
+  if (event.key !== 'Shift') return
+  isShiftPressed.value = false
+  if (!isCreateDragging.value) {
+    shiftHoverTooltipVisible.value = false
+  }
 }
 
 // 鼠标抬起结束拖拽
@@ -4426,7 +4623,7 @@ const handleDragBoundaryCheck = (event: CustomEvent) => {
       const rowTop = resourceRowPositions.value.get(resourceId) || 0
       // v1.9.9 从resoureTaskLayouts直接获取布局
       const layout = resourceTaskLayouts.value.get(resourceId)
-      const rowHeight = layout?.totalHeight || 51
+      const rowHeight = layout?.totalHeight || 32
       const rowCenter = rowTop + rowHeight / 2
       const distance = Math.abs(relativeY - rowCenter)
 
@@ -4491,6 +4688,9 @@ onUnmounted(() => {
   window.removeEventListener('milestone-click-locate', handleMilestoneClickLocate as EventListener)
   window.removeEventListener('drag-boundary-check', handleDragBoundaryCheck as EventListener)
   window.removeEventListener('resource-taskbar-drop', handleResourceTaskBarDrop as EventListener)
+  window.removeEventListener('mousemove', handleWindowMouseMove)
+  window.removeEventListener('keydown', handleKeyDown)
+  window.removeEventListener('keyup', handleKeyUp)
 
   // 清理ResizeObserver
   if (resizeObserver) {
@@ -5099,6 +5299,8 @@ const handleAddSuccessor = (task: Task) => {
     ref="timelineContainer"
     class="timeline"
     @mousedown="handleMouseDown"
+    @mousemove="handleTimelineMouseMove"
+    @mouseleave="handleTimelineMouseLeave"
     @scroll="handleTimelineScroll"
   >
     <!-- Timeline Header -->
@@ -5359,6 +5561,20 @@ const handleAddSuccessor = (task: Task) => {
           class="timeline-create-drag-overlay"
           :style="createDragOverlayStyle"
         ></div>
+        <div
+          v-if="isCreateDragging && createDragShiftPressed"
+          class="timeline-create-drag-tooltip"
+          :style="createDragTooltipStyle"
+        >
+          {{ createDragTooltipText }}
+        </div>
+        <div
+          v-if="!isCreateDragging && shiftHoverTooltipVisible"
+          class="timeline-create-drag-tooltip"
+          :style="shiftHoverTooltipStyle"
+        >
+          {{ shiftHoverTooltipText }}
+        </div>
 
         <!-- 年度视图今日标记线 -->
         <div
@@ -5545,7 +5761,11 @@ const handleAddSuccessor = (task: Task) => {
               :key="task.id"
               class="task-row"
               :class="{ 'task-row-hovered': hoveredTaskId === task.id }"
-              :style="{ top: `${originalIndex * 51}px` }"
+              :style="{
+                top: `${taskViewRowPositions[originalIndex] || 0}px`,
+                height: `${getTaskViewRowHeight(task)}px`,
+                minHeight: `${getTaskViewRowHeight(task)}px`
+              }"
               @mouseenter="handleTaskRowHover(task.id)"
               @mouseleave="handleTaskRowHover(null)"
             >
@@ -5624,7 +5844,7 @@ const handleAddSuccessor = (task: Task) => {
                 :key="`taskbar-${task.id}-${taskBarRenderKey}`"
                 :task="task"
                 :row-index="originalIndex"
-                :row-height="50"
+                :row-height="getTaskViewRowHeight(task) - 1"
                 :day-width="dayWidth"
                 :start-date="
                   currentTimeScale === TimelineScale.YEAR
@@ -5701,7 +5921,7 @@ const handleAddSuccessor = (task: Task) => {
               :class="{ 'task-row-hovered': hoveredTaskId === resource.id }"
               :style="{
                 top: `${resourceRowPositions?.get(resource.id) || 0}px`,
-                height: `${resourceTaskLayouts?.get(resource.id)?.totalHeight || 51}px`
+                height: `${resourceTaskLayouts?.get(resource.id)?.totalHeight || 32}px`
               }"
               @mouseenter="handleTaskRowHover(resource.id)"
               @mouseleave="handleTaskRowHover(null)"
@@ -5713,9 +5933,9 @@ const handleAddSuccessor = (task: Task) => {
                   :key="`taskbar-${task.id}-${taskBarRenderKey}`"
                   :task="task"
                   :row-index="originalIndex"
-                  :row-height="51"
+                  :row-height="32"
                   :task-sub-row="resourceTaskLayouts?.get(resource.id)?.taskRowMap.get(task.id) || 0"
-                  :row-heights="resourceTaskLayouts?.get(resource.id)?.rowHeights || [51]"
+                  :row-heights="resourceTaskLayouts?.get(resource.id)?.rowHeights || [32]"
                   :day-width="dayWidth"
                   :start-date="
                     currentTimeScale === TimelineScale.YEAR
@@ -5805,7 +6025,7 @@ const handleAddSuccessor = (task: Task) => {
                         : timelineConfig.startDate
                   "
                   :top-offset="7.5"
-                  :height="(resourceTaskLayouts.get(resource.id)?.totalHeight || 51) - 10"
+                  :height="(resourceTaskLayouts.get(resource.id)?.totalHeight || 32) - 10"
                   :width="totalTimelineWidth"
                   :timeline-data="timelineData as any"
                   :current-time-scale="currentTimeScale"
@@ -6150,6 +6370,20 @@ const handleAddSuccessor = (task: Task) => {
   pointer-events: none;
 }
 
+.timeline-create-drag-tooltip {
+  position: fixed;
+  z-index: 1200;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(17, 24, 39, 0.92);
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+
 .task-bar-container {
   position: absolute;
   top: 0;
@@ -6183,6 +6417,7 @@ const handleAddSuccessor = (task: Task) => {
   position: absolute !important;
   left: 0;
   width: 100%;
+  min-height: 32px;
   /* height由内联样式动态设置，不使用固定值 */
   pointer-events: auto;
   z-index: 11;
